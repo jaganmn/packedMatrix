@@ -65,10 +65,6 @@ setMethod("norm", signature(x = "dspMatrix", type = "missing"),
           function(x, type, ...) .Call(dspMatrix_norm, x, "O"),
           valueClass = "numeric")
 
-setMethod("t", signature(x = "dspMatrix"),
-          function(x) .dsy2dsp(t(dsp2dsy(x))), # FIXME inefficient
-          valueClass = "dspMatrix")
-
 setMethod("diag", signature(x = "dspMatrix"),
 	  function(x, nrow, ncol) .Call(dspMatrix_getDiag, x))
 setMethod("diag<-", signature(x = "dspMatrix"),

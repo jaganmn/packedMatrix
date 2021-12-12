@@ -36,3 +36,8 @@ vignettes/fullpage\.sty
 tests/useRNG
 tests/.*\.Rout.*[24]b
 tests/.*_(doExtra|nX)$
+
+## packedMatrix
+^README\.R?md$
+\.tar\.gz$
+\.Rcheck$

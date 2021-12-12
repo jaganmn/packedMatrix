@@ -73,6 +73,7 @@ extern "C" {
 
 SEXP triangularMatrix_validate(SEXP obj);
 SEXP symmetricMatrix_validate(SEXP obj);
+SEXP packedMatrix_validate(SEXP obj);
 SEXP dense_nonpacked_validate(SEXP obj);
 SEXP dim_validate(SEXP Dim, const char* name);
 SEXP Dim_validate(SEXP obj, SEXP name);

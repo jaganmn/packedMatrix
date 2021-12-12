@@ -158,10 +158,6 @@ rm(.diag.set.ltr, .diag.set.ltp)
 setMethod("t", signature(x = "lgeMatrix"), t_geMatrix)
 setMethod("t", signature(x = "ltrMatrix"), t_trMatrix)
 setMethod("t", signature(x = "lsyMatrix"), t_trMatrix)
-setMethod("t", signature(x = "ltpMatrix"),
-	  function(x) as(t(as(x, "ltrMatrix")), "ltpMatrix"))
-setMethod("t", signature(x = "lspMatrix"),
-	  function(x) as(t(as(x, "lsyMatrix")), "lspMatrix"))
 
 ## NOTE:  "&" and "|"  are now in group "Logic" c "Ops" --> ./Ops.R
 ##        "!" is in ./not.R

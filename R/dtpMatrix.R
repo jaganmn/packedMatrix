@@ -74,7 +74,3 @@ setMethod("solve", signature(a = "dtpMatrix", b="ddenseMatrix"),
 setMethod("solve", signature(a = "dtpMatrix", b="matrix"),
 	  function(a, b, ...) .Call(dtpMatrix_matrix_solve, a, b),
 	  valueClass = "dgeMatrix")
-
-## FIXME: speed up
-setMethod("t", "dtpMatrix",
-	  function(x) dtr2dtp(t(dtp2dtr(x))), valueClass = "dtpMatrix")
