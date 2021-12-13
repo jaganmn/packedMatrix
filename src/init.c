@@ -259,6 +259,8 @@ static R_CallMethodDef CallEntries[] = {
     CALLDEF(packedMatrix_validate, 1),
     CALLDEF(R_symmetric_Dimnames, 1),
 
+    CALLDEF(packedMatrix_t, 1),
+
 /* still simple placeholders, but already used in ../R/AllClass.R : */
     CALLDEF(CHMfactor_validate, 1),
     CALLDEF(CHMsimpl_validate, 1),

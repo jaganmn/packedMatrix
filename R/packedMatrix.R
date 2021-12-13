@@ -520,24 +520,7 @@ options(.op)
 rm(.i.map, .j.map, .i.cl, .j.cl, .op, .nm0, .nm1)
 
 setMethod("t", signature(x = "packedMatrix"),
-          function(x) {
-              n <- x@Dim[1L]
-              up <- x@uplo == "U"
-              if (n > 1L) {
-                  if (up) {
-                      i <- rep.int(1:n, n:1)
-                      j <- sequence(n:1, 1:n)
-                  } else {
-                      i <- rep.int(1:n, 1:n)
-                      j <- sequence(1:n)
-                  }
-                  k <- .pM.arity21(i, j, n = n, up = up)
-                  x@x <- x@x[k]
-              }
-              x@uplo <- if (up) "L" else "U"
-              x@Dimnames <- x@Dimnames[2:1]
-              x
-          })
+          function(x) .Call(packedMatrix_t, x))
 
 ## These methods are obviously much slower than the existing methods
 ## implemented in C, but they _are_ slightly more faithful to the

@@ -4,4 +4,6 @@
 #include "Lapack-etc.h"
 #include "Mutils.h"
 
+SEXP packedMatrix_t(SEXP obj);
+
 #endif
