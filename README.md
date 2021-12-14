@@ -1,74 +1,93 @@
 packedMatrix
 ================
-2021-12-13
+2021-12-14
 
 Based on discussion on R-devel beginning
 [here](https://stat.ethz.ch/pipermail/r-devel/2021-November/081261.html)
 and continued privately with Martin Mächler.
 
-## Utilities
-
-A basic helper for constructing `"packedMatrix"`, a virtual superclass
-of `"[dln][st]pMatrix"`:
+## Class definition
 
 ``` r
-## Construct an 'n'-by-'n' "dspMatrix" storing a sequence of integers
-newDsp <- function(n) {
-  x <- as.double(seq_len(choose(n + 1L, 2L)))
-  new("dspMatrix", uplo = "U", x = x, Dim = c(n, n),
-      Dimnames = list(A = sprintf("i%d", seq_len(n)), B = NULL))
-}
+library("Matrix")
+showClass("packedMatrix")
 ```
 
-And two nonstandard evaluation tricks to avoid code duplication in
-tests:
+    ## Virtual Class "packedMatrix" [package "Matrix"]
+    ## 
+    ## Slots:
+    ##                                     
+    ## Name:       uplo       Dim  Dimnames
+    ## Class: character   integer      list
+    ## 
+    ## Extends: 
+    ## Class "Matrix", directly
+    ## Class "mMatrix", by class "Matrix", distance 2
+    ## Class "replValueSp", by class "Matrix", distance 2
+    ## 
+    ## Known Subclasses: 
+    ## Class "dtpMatrix", directly
+    ## Class "dspMatrix", directly
+    ## Class "ltpMatrix", directly
+    ## Class "lspMatrix", directly
+    ## Class "ntpMatrix", directly
+    ## Class "nspMatrix", directly
+    ## Class "dppMatrix", by class "dspMatrix", distance 2
+    ## Class "pCholesky", by class "dtpMatrix", distance 2
+    ## Class "pBunchKaufman", by class "dtpMatrix", distance 2
+
+## Utilities for tests
+
+`checkEquiv` takes as an argument a list of calls `FUN(x, ...)` and
+returns a logical vector of the same length, indicating whether the
+values of `FUN(x, ...)` are consistent with the values of
+`FUN(as(x, "matrix"), ...)`. (Here, *consistent* means identical modulo
+a coercion from `"Matrix"` to `"matrix"`.)
 
 ``` r
-## For each call FUN(<packedMatrix>, ...) passed as argument,
-## test equivalence to FUN(as(<packedMatrix>, "matrix"), ...)
-checkEquiv <- function(...) {
-  e <- parent.frame()
-  equiv1 <- function(x1) {
-    stopifnot(is.call(x1) && length(x1) > 1L)
+checkEquiv <- function(exprs) {
+  f <- function(x1, envir) {
+    stopifnot(is.call(x1), length(x1) > 1L)
     x2 <- x1
     x2[[2L]] <- call("as", x2[[2L]], "matrix") 
-    m1 <- eval(x1, e)
-    m2 <- eval(x2, e)
+    m1 <- eval(x1, envir)
+    m2 <- eval(x2, envir)
     if (is(m1, "Matrix")) {
       m1 <- as(m1, "matrix")
     }
     identical(m1, m2)
   }
-  l <- as.list(match.call())[-1L]
-  res <- vapply(l, equiv1, NA)
-  names(res) <- vapply(l, deparse1, "")
+  res <- vapply(exprs, f, NA, parent.frame())
+  names(res) <- vapply(exprs, deparse, "")
   res
-}
-
-## Benchmark the calls FUN(<packedMatrix>, ...) passed as arguments,
-## together with the calls FUN(as(<packedMatrix>, "matrix"), ...)
-checkTimes <- function(..., times = 100L) {
-  e <- parent.frame()
-  f <- function(x) {
-    stopifnot(is.call(x) && length(x) > 1L)
-    x[[2L]] <- call("as", x[[2L]], "matrix")
-    x
-  }
-  l1 <- as.list(match.call())[-1L]
-  l1[["times"]] <- NULL
-  l2 <- vector("list", 2L * length(l1))
-  l2[c(TRUE, FALSE)] <- l1
-  l2[c(FALSE, TRUE)] <- lapply(l1, f)
-  cl <- as.call(c(list(quote(microbenchmark::microbenchmark)), l2, list(times = times)))
-  eval(cl, e)
 }
 ```
 
-## Subset tests
+`checkTimes` takes as an argument a list of calls `FUN(x, ...)` and
+returns a benchmark comparing their evaluation times to those of the
+calls `FUN(as(x, "matrix"), ...)`.
+
+``` r
+checkTimes <- function(exprs, times = 100L) {
+  stopifnot(requireNamespace("microbenchmark"))
+  f <- function(x) {
+    stopifnot(is.call(x), length(x) > 1L)
+    x[[2L]] <- call("as", x[[2L]], "matrix")
+    x
+  }
+  l <- vector("list", 2L * length(exprs))
+  l[c(TRUE, FALSE)] <- exprs
+  l[c(FALSE, TRUE)] <- lapply(exprs, f)
+  l <- c(list(quote(microbenchmark::microbenchmark)), l, list(times = times))
+  eval(as.call(l), parent.frame())
+}
+```
+
+## `[` method tests
 
 For `"packedMatrix"`, the subset operator `[` avoids coercion to
-`"matrix"` in many special cases. Here is a list of subset operations to
-be tested.
+`"matrix"` in many special cases. Here is a list of operations to be
+tested.
 
 ``` r
 exprs <- alist(S[integer(0L)],
@@ -109,95 +128,105 @@ We start by checking that the `"packedMatrix"` subset is consistent with
 the subset via `"matrix"`.
 
 ``` r
-library("Matrix")
-S <- newDsp(10L)
-all(do.call(checkEquiv, exprs))
+n <- 10L
+S <- new("dspMatrix", uplo = "U", x = as.double(seq_len(choose(n + 1L, 2L))),
+         Dim = c(n, n), Dimnames = list(A = sprintf("i%d", seq_len(n)), B = NULL))
+all(checkEquiv(exprs))
 ```
 
     ## [1] TRUE
 
-Now we check that, in many cases, the `"packedMatrix"` subset is faster.
+Now we test its performance against the subset via `"matrix"`.
 
 ``` r
-S <- newDsp(1000L)
-do.call(checkTimes, exprs)
+n <- 1000L
+S <- new("dspMatrix", uplo = "U", x = as.double(seq_len(choose(n + 1L, 2L))),
+         Dim = c(n, n), Dimnames = list(A = sprintf("i%d", seq_len(n)), B = NULL))
+checkTimes(exprs)
 ```
+
+    ## Loading required namespace: microbenchmark
 
     ## Warning in microbenchmark::microbenchmark(S[integer(0L)], as(S, "matrix")[integer(0L)], : less accurate nanosecond times to avoid potential integer overflows
 
     ## Unit: microseconds
     ##                                                            expr       min         lq        mean     median         uq        max neval
-    ##                                                  S[integer(0L)]     3.895     8.3435    19.06869    18.7165    25.0715     50.389   100
-    ##                                    as(S, "matrix")[integer(0L)]  1223.645  1660.9510  2930.44425  1764.7425  2135.9565  59765.700   100
-    ##                                                   S[c(0:6, NA)]    16.359    37.5560    56.35942    58.5480    68.3470    147.641   100
-    ##                                     as(S, "matrix")[c(0:6, NA)]  1182.522  1633.4400  2813.14571  1761.9545  2477.2405  52300.543   100
-    ##                                                       S[-(0:6)] 47633.185 50722.2685 63076.11175 52390.1485 56674.9765 120609.413   100
-    ##                                         as(S, "matrix")[-(0:6)]  3438.096  4055.3100  5730.53843  5053.8035  5710.9310  59975.169   100
-    ##                                                  S[logical(0L)]     2.747     8.9995    17.72922    18.0400    22.8575     69.085   100
-    ##                                    as(S, "matrix")[logical(0L)]  1354.845  1664.4975  2444.97637  1794.0985  3057.3700   9616.550   100
-    ##                                                         S[TRUE]   662.027  1108.4965  1616.21180  1184.0800  1389.1825   6544.953   100
-    ##                                           as(S, "matrix")[TRUE]  3671.427  4085.7320  5581.28695  4841.5670  5816.8750  51219.947   100
-    ##                                                        S[FALSE]     4.756     7.9335    16.78294    15.5595    23.7595     63.837   100
-    ##                                          as(S, "matrix")[FALSE]  1992.559  2631.0725  3348.96651  2753.4780  4164.1240   7788.442   100
-    ##                                                           S[NA]   637.099   974.8570  1947.24826  1010.6090  1144.0845  49208.077   100
-    ##                                             as(S, "matrix")[NA]  2951.672  3883.4790  5130.73959  5009.7285  6039.8740  10916.127   100
-    ##                                           S[c(TRUE, FALSE, NA)] 33392.081 36681.8185 45613.07851 38114.3995 41225.4385 129927.565   100
-    ##                             as(S, "matrix")[c(TRUE, FALSE, NA)]  2925.473  3540.0015  5457.66416  4083.1900  5896.7020  56696.686   100
-    ##                                                S[integer(0L), ]   142.106   255.8605   290.54322   302.9490   332.9610    751.612   100
-    ##                                  as(S, "matrix")[integer(0L), ]  1104.417  1682.5990  3414.32420  1847.9930  3345.4975  51646.675   100
-    ##                                                         S[1L, ]    26.363    54.4890    76.28296    73.5130    95.7555    185.074   100
-    ##                                           as(S, "matrix")[1L, ]  1302.201  1636.8840  2279.62296  1765.2345  2070.3770   7921.938   100
-    ##                                           S[1L, , drop = FALSE]   166.419   222.1995   319.35966   332.5920   373.2025    568.752   100
-    ##                             as(S, "matrix")[1L, , drop = FALSE]  1211.222  1636.2895  2506.35173  1769.1910  3193.6745   7082.586   100
-    ##                                                 S[c(0:1, NA), ]   171.872   273.9415   328.93316   338.6805   369.9430    827.585   100
-    ##                                   as(S, "matrix")[c(0:1, NA), ]  1314.583  1634.4855  2333.49614  1769.2115  2582.4260   6432.203   100
-    ##                                                 S[c(0:2, NA), ]  1471.859  1839.2190  3719.98781  2065.6620  3486.6810  54068.504   100
-    ##                                   as(S, "matrix")[c(0:2, NA), ]  1412.409  1696.1290  3639.97098  1829.9735  2764.8760  58275.965   100
-    ##                                          S[-seq_len(nrow(S)), ]   145.058   232.6545   293.74737   293.3960   343.5390    646.242   100
-    ##                            as(S, "matrix")[-seq_len(nrow(S)), ]  1269.032  1651.6235  2259.11066  1753.6520  2076.8755   8567.893   100
-    ##                                     S[-seq_len(nrow(S))[-1L], ]    39.032    71.6885    88.17255    85.7925   103.8530    178.596   100
-    ##                       as(S, "matrix")[-seq_len(nrow(S))[-1L], ]  1208.680  1659.9875  2721.60296  1783.2540  2386.8560  52372.539   100
-    ##                                  S[-seq_len(nrow(S))[-(1:2)], ]  1616.056  1898.1155  3918.63076  2070.7665  3662.3045  54886.495   100
-    ##                    as(S, "matrix")[-seq_len(nrow(S))[-(1:2)], ]  1141.153  1702.2380  3441.97706  1864.3110  3802.9960  56019.325   100
-    ##                                                S[logical(0L), ]   137.801   249.0955   285.29563   296.3275   324.2895    608.563   100
-    ##                                  as(S, "matrix")[logical(0L), ]  1377.477  1677.1460  3001.41484  1787.2720  2987.5265  53954.565   100
-    ##                                                       S[TRUE, ]     4.961    13.6530    27.35397    22.3450    34.8090    162.483   100
-    ##                                         as(S, "matrix")[TRUE, ]  2968.441  3371.1840  4321.91537  3678.3560  4865.6750  10503.708   100
-    ##                                                      S[FALSE, ]   141.901   221.7075   276.98206   294.2570   323.1620    529.310   100
-    ##                                        as(S, "matrix")[FALSE, ]  1356.690  1660.5000  2795.50259  1801.4580  2847.9420  51784.722   100
-    ##                                                         S[NA, ]  1070.633  1245.3135  2286.88775  1333.7300  1453.0605  61002.260   100
-    ##                                           as(S, "matrix")[NA, ]  2621.540  2806.7370  3908.66120  3123.2570  4835.6630   8876.705   100
-    ##                                         S[c(TRUE, FALSE, NA), ]  2892.427  3257.9215  5377.02741  3645.9045  5356.5475  57134.853   100
-    ##                           as(S, "matrix")[c(TRUE, FALSE, NA), ]  1988.213  2646.2630  5000.96311  2824.7770  4216.9935  58780.675   100
-    ##                                              S[character(0L), ]   146.575   259.3455   283.62119   292.1455   327.3850    627.587   100
-    ##                                as(S, "matrix")[character(0L), ]  1315.157  1667.1830  2445.11741  1819.3545  3158.6195   7993.114   100
-    ##                                            S[rownames(S)[1L], ]    33.702    62.0125    86.76707    82.7585   103.9145    266.828   100
-    ##                              as(S, "matrix")[rownames(S)[1L], ]  1523.847  1738.5435  3971.31494  1909.7185  3872.3475  52095.953   100
-    ##                              S[rownames(S)[1L], , drop = FALSE]   183.270   304.9375   340.96338   346.4705   383.3705    642.511   100
-    ##                as(S, "matrix")[rownames(S)[1L], , drop = FALSE]  1146.196  1678.0275  2801.10606  1794.8365  2482.1400  55653.605   100
-    ##                                           S[rownames(S)[1:2], ]  1529.915  1874.5815  3202.62849  2002.9320  3169.9765  57451.742   100
-    ##                             as(S, "matrix")[rownames(S)[1:2], ]  1242.300  1664.8050  2415.51008  1780.6710  2243.8890   9755.909   100
-    ##                                           S[matrix(0L, 0L, 2L)]    16.933    40.3645    55.19953    56.6825    69.4130    109.675   100
-    ##                             as(S, "matrix")[matrix(0L, 0L, 2L)]  1337.420  1675.5265  2921.69526  1776.4070  2945.1735  54668.498   100
-    ##                                S[cbind(c(0:6, NA), c(NA, 6:0))]    28.413    65.7845    84.79866    83.0865    96.2680    171.134   100
-    ##                  as(S, "matrix")[cbind(c(0:6, NA), c(NA, 6:0))]  1290.311  1684.5260  2996.72157  1798.5060  2789.3325  51695.219   100
-    ##                S[cbind(c(rownames(S), NA), c(NA, colnames(S)))]   125.337   186.8165   211.87242   212.0930   230.8710    336.446   100
-    ##  as(S, "matrix")[cbind(c(rownames(S), NA), c(NA, colnames(S)))]  1296.461  1762.4055  2460.27511  1900.3910  2829.6970   9252.019   100
-    ##                     S[matrix(c(TRUE, FALSE), nrow(S), ncol(S))] 28900.408 31521.2510 39450.95112 33294.7470 34512.1395 101331.213   100
-    ##       as(S, "matrix")[matrix(c(TRUE, FALSE), nrow(S), ncol(S))]  3522.392  4271.0725  6611.87320  5419.1340  6478.2460  53338.171   100
-    ##                                                         S[NULL]     4.141     8.4460    18.09207    17.5685    24.4360     45.346   100
-    ##                                           as(S, "matrix")[NULL]  1330.368  1632.3740  2249.98775  1798.8955  2322.6500   6677.629   100
-    ##                                                       S[NULL, ]   137.883   162.7085   249.95896   263.5070   307.5205    548.252   100
-    ##                                         as(S, "matrix")[NULL, ]  1446.316  1653.7145  2272.41065  1785.3655  2528.3265   6693.824   100
-    ##                                                       S[, NULL]   138.785   203.3190   276.85988   289.8495   316.9505    671.211   100
-    ##                                         as(S, "matrix")[, NULL]  1121.678  1655.6620  2263.32833  1781.9830  2223.6760   7944.119   100
+    ##                                                  S[integer(0L)]     5.002     7.9745    15.52998    14.9035    21.6070     41.123   100
+    ##                                    as(S, "matrix")[integer(0L)]  1022.581  1592.9115  2435.70299  1742.1515  3067.4970   8663.341   100
+    ##                                                   S[c(0:6, NA)]    14.186    38.4785    58.38031    54.9810    73.5130    134.972   100
+    ##                                     as(S, "matrix")[c(0:6, NA)]  1074.979  1554.7405  2194.03095  1669.7045  2201.8435   6626.502   100
+    ##                                                       S[-(0:6)] 45093.809 49920.1650 63339.73888 51659.6515 58721.5325 153498.506   100
+    ##                                         as(S, "matrix")[-(0:6)]  2828.344  3907.7510  5531.53673  4714.5900  5897.9320  55137.784   100
+    ##                                                  S[logical(0L)]     2.788     6.8880    15.27824    13.8785    21.5455     57.892   100
+    ##                                    as(S, "matrix")[logical(0L)]  1228.647  1594.1825  2399.94320  1739.1790  2334.1095   9366.901   100
+    ##                                                         S[TRUE]   744.109  1068.1320  3028.11035  1160.7715  1436.4965  50220.490   100
+    ##                                           as(S, "matrix")[TRUE]  3299.229  3923.1670  5058.47094  4395.1385  5555.9715  14397.232   100
+    ##                                                        S[FALSE]     4.592     8.1590    17.24050    15.9695    25.6455     39.319   100
+    ##                                          as(S, "matrix")[FALSE]  2425.765  2568.5065  3696.70801  2688.6160  3083.4460  56082.055   100
+    ##                                                           S[NA]   634.926   974.9595  1845.10742  1011.9825  1113.1500  52143.923   100
+    ##                                             as(S, "matrix")[NA]  3471.634  3796.6820  4909.49990  4148.2160  5562.9210  12378.884   100
+    ##                                           S[c(TRUE, FALSE, NA)] 33120.415 36299.4320 44590.19698 37296.6135 39538.5960  93124.448   100
+    ##                             as(S, "matrix")[c(TRUE, FALSE, NA)]  2706.123  3424.9145  5360.67046  3636.5565  5282.5835  58244.313   100
+    ##                                                S[integer(0L), ]   143.254   256.0860   276.20224   286.4875   307.3155    488.187   100
+    ##                                  as(S, "matrix")[integer(0L), ]  1041.646  1567.5325  2246.25101  1707.5270  2505.0180   8510.452   100
+    ##                                                         S[1L, ]    26.035    50.6965    68.03130    69.0850    82.5945    147.887   100
+    ##                                           as(S, "matrix")[1L, ]  1412.409  1582.0875  2378.51455  1764.9270  2898.4540  14194.733   100
+    ##                                           S[1L, , drop = FALSE]   168.387   301.6985   320.41746   330.8905   360.3900    615.082   100
+    ##                             as(S, "matrix")[1L, , drop = FALSE]  1313.353  1598.7130  3580.22537  1757.7725  3512.7570  53489.174   100
+    ##                                                 S[c(0:1, NA), ]   170.191   206.9475   303.61074   325.1300   368.6720    458.175   100
+    ##                                   as(S, "matrix")[c(0:1, NA), ]   964.730  1580.6320  2641.54759  1695.0015  2196.9235  49501.022   100
+    ##                                                 S[c(0:2, NA), ]  1558.984  1769.4165  3518.20016  1929.0910  3216.6140  52227.604   100
+    ##                                   as(S, "matrix")[c(0:2, NA), ]  1218.643  1609.6190  2825.01316  1711.4630  2935.2515  56171.722   100
+    ##                                          S[-seq_len(nrow(S)), ]   144.525   183.5365   267.62176   280.8295   314.6340    555.714   100
+    ##                            as(S, "matrix")[-seq_len(nrow(S)), ]  1062.105  1590.2055  2787.36942  1741.5980  2214.0000  51596.368   100
+    ##                                     S[-seq_len(nrow(S))[-1L], ]    39.565    64.2265    83.47108    85.5055   102.7050    189.051   100
+    ##                       as(S, "matrix")[-seq_len(nrow(S))[-1L], ]  1240.783  1578.2950  2266.18398  1706.1125  2240.4450   7358.844   100
+    ##                                  S[-seq_len(nrow(S))[-(1:2)], ]  1158.209  1804.2870  2602.29706  1979.4185  3198.1025   8087.291   100
+    ##                    as(S, "matrix")[-seq_len(nrow(S))[-(1:2)], ]  1040.703  1627.5155  3226.22686  1764.6400  2551.2455  49769.941   100
+    ##                                                S[logical(0L), ]   137.801   162.6880   248.86016   262.9535   314.5315    492.533   100
+    ##                                  as(S, "matrix")[logical(0L), ]  1026.107  1570.9355  2579.50885  1676.4695  1937.4345  50621.552   100
+    ##                                                       S[TRUE, ]     6.929    12.7305    23.13097    24.6615    31.4880     51.373   100
+    ##                                         as(S, "matrix")[TRUE, ]  2769.058  3279.0160  4662.06203  3515.2990  4749.3990  55423.144   100
+    ##                                                      S[FALSE, ]   140.835   170.0270   253.13113   269.6775   302.6825    517.748   100
+    ##                                        as(S, "matrix")[FALSE, ]  1086.582  1589.5700  2415.52033  1711.1350  3065.7955   7270.407   100
+    ##                                                         S[NA, ]   953.209  1240.7625  2258.91837  1318.6010  1425.5085  49795.197   100
+    ##                                           as(S, "matrix")[NA, ]  2512.111  2790.2755  4498.52205  3211.6120  4727.6485  56413.130   100
+    ##                                         S[c(TRUE, FALSE, NA), ]  2699.112  3172.5800  4343.77001  3694.2230  5292.1980  10927.156   100
+    ##                           as(S, "matrix")[c(TRUE, FALSE, NA), ]  1980.013  2602.1060  4002.62746  2826.8270  4201.6595  56642.853   100
+    ##                                              S[character(0L), ]   145.714   255.7375   281.42400   291.6740   317.9960    589.744   100
+    ##                                as(S, "matrix")[character(0L), ]  1309.868  1595.9455  2355.33602  1741.0035  2710.2435   9250.420   100
+    ##                                            S[rownames(S)[1L], ]    32.759    58.3840    75.92749    75.3785    92.6805    134.070   100
+    ##                              as(S, "matrix")[rownames(S)[1L], ]  1006.263  1606.7900  2883.21881  1736.2680  2957.3095  49076.344   100
+    ##                              S[rownames(S)[1L], , drop = FALSE]   177.284   284.7245   330.40998   335.6670   368.7130    641.691   100
+    ##                as(S, "matrix")[rownames(S)[1L], , drop = FALSE]  1136.889  1585.0600  2602.50657  1706.9120  2020.5005  50695.639   100
+    ##                                           S[rownames(S)[1:2], ]  1421.306  1790.5725  2645.63570  1969.5580  3163.6010   9471.861   100
+    ##                             as(S, "matrix")[rownames(S)[1:2], ]  1361.979  1594.8385  2651.43310  1693.0540  2051.1275  56875.815   100
+    ##                                           S[matrix(0L, 0L, 2L)]    18.532    41.0205    54.57264    55.6575    66.9120    100.737   100
+    ##                             as(S, "matrix")[matrix(0L, 0L, 2L)]  1218.151  1592.5835  2703.58510  1710.8275  2194.4430  55735.318   100
+    ##                                S[cbind(c(0:6, NA), c(NA, 6:0))]    26.240    62.1970    76.21613    74.8455    90.2410    162.975   100
+    ##                  as(S, "matrix")[cbind(c(0:6, NA), c(NA, 6:0))]  1304.374  1592.7475  3448.96264  1741.2085  2987.9775  53358.220   100
+    ##                S[cbind(c(rownames(S), NA), c(NA, colnames(S)))]   129.109   189.7685   209.41898   207.8905   229.4975    289.337   100
+    ##  as(S, "matrix")[cbind(c(rownames(S), NA), c(NA, colnames(S)))]  1308.310  1658.3065  2603.86285  1800.8020  3486.2300  13669.687   100
+    ##                     S[matrix(c(TRUE, FALSE), nrow(S), ncol(S))] 28415.132 30725.4205 36614.08035 31914.1130 33942.0550  99550.788   100
+    ##       as(S, "matrix")[matrix(c(TRUE, FALSE), nrow(S), ncol(S))]  3834.607  4091.5130  5625.39188  4446.2860  5872.5940  52062.907   100
+    ##                                                         S[NULL]     4.674     8.5280    16.80221    14.6985    21.8325     47.519   100
+    ##                                           as(S, "matrix")[NULL]  1452.548  1596.6015  2931.39791  1760.9910  2960.4460  50727.414   100
+    ##                                                       S[NULL, ]   142.557   225.0490   264.92560   272.6295   307.9510    475.354   100
+    ##                                         as(S, "matrix")[NULL, ]  1060.178  1564.3550  2658.70978  1712.8775  2106.0060  50371.247   100
+    ##                                                       S[, NULL]   142.598   232.3880   271.81442   287.7175   312.3995    394.133   100
+    ##                                         as(S, "matrix")[, NULL]   994.947  1586.3105  2812.39828  1700.2085  2491.0165  55356.396   100
 
-The `"packedMatrix"` subset is slower in some cases because priority is
-given to memory efficiency:
+The `"packedMatrix"` subset is slower in some cases because:
+
+-   It is implemented in R rather than C (for now).
+-   It takes extra steps to avoid a coercion to `"matrix"`.
+
+However, for large enough `n`, there is no comparison…
 
 ``` r
-S <- newDsp(30000L)
+n <- 30000L
 i <- replace(logical(1000L), 1L, TRUE)
+S <- new("dspMatrix", uplo = "U", x = as.double(seq_len(choose(n + 1L, 2L))), Dim = c(n, n))
 {S[i]; cat("done!\n")}
 ```
 
@@ -209,33 +238,103 @@ i <- replace(logical(1000L), 1L, TRUE)
 
     ## Error: vector memory exhausted (limit reached?)
 
-## Transpose tests
+## `t` method tests
 
 ``` r
-S <- newDsp(1000L)
-identical(as(t(S), "matrix"), t(as(S, "matrix")))
+selectMethod("t", signature(x = "packedMatrix"))
+```
+
+    ## Method Definition:
+    ## 
+    ## function (x) 
+    ## .Call(packedMatrix_t, x)
+    ## <bytecode: 0x11c9ab798>
+    ## <environment: namespace:Matrix>
+    ## 
+    ## Signatures:
+    ##         x             
+    ## target  "packedMatrix"
+    ## defined "packedMatrix"
+
+``` r
+n <- 1000L
+L <- new("dtpMatrix", uplo = "L", x = as.double(seq_len(choose(n + 1L, 2L))), 
+         Dim = c(n, n), Dimnames = list(A = NULL, B = sprintf("j%d", seq_len(n))))
+identical(as(t(L), "matrix"), t(as(L, "matrix")))
 ```
 
     ## [1] TRUE
 
 ``` r
-microbenchmark::microbenchmark(t(S), as(t(as(S, "dsyMatrix")), "dspMatrix"))
+microbenchmark::microbenchmark(t(L), as(t(as(L, "dtrMatrix")), "dtpMatrix"))
 ```
 
     ## Unit: microseconds
     ##                                    expr      min       lq      mean   median       uq      max neval
-    ##                                    t(S)  623.159  648.374  685.5077  666.045  698.763  910.856   100
-    ##  as(t(as(S, "dsyMatrix")), "dspMatrix") 4940.582 5128.731 5367.2514 5239.636 5430.040 6989.762   100
+    ##                                    t(L)  549.195  699.870  727.1034  718.156  751.694  855.916   100
+    ##  as(t(as(L, "dtrMatrix")), "dtpMatrix") 4235.874 5128.342 5197.0468 5202.306 5351.648 5885.878   100
 
 ``` r
-S <- newDsp(30000L)
-{t(S); cat("done!\n")}
+n <- 30000L
+L <- new("dtpMatrix", uplo = "L", x = as.double(seq_len(choose(n + 1L, 2L))), Dim = c(n, n))
+{t(L); cat("done!\n")}
 ```
 
     ## done!
 
 ``` r
-{as(t(as(S, "dsyMatrix")), "dspMatrix"); cat("done!\n")}
+{as(t(as(L, "dtrMatrix")), "dtpMatrix"); cat("done!\n")}
 ```
 
     ## Error in h(simpleError(msg, call)): error in evaluating the argument 'x' in selecting a method for function 't': vector memory exhausted (limit reached?)
+
+## `diag` method tests
+
+``` r
+selectMethod("diag", signature(x = "packedMatrix"))
+```
+
+    ## Method Definition:
+    ## 
+    ## function (x = 1, nrow, ncol, names = TRUE) 
+    ## {
+    ##     .Call(packedMatrix_diag_get, x, isTRUE(names[1L]))
+    ## }
+    ## <bytecode: 0x11890af68>
+    ## <environment: namespace:Matrix>
+    ## 
+    ## Signatures:
+    ##         x             
+    ## target  "packedMatrix"
+    ## defined "packedMatrix"
+
+``` r
+n <- 6L
+U <- new("lspMatrix", uplo = "U", x = sample(c(TRUE, FALSE), choose(n + 1L, 2L), TRUE),
+         Dim = c(n, n), Dimnames = list(letters[1:6], NULL))
+U
+```
+
+    ## 6 x 6 Matrix of class "lspMatrix"
+    ##       a     b     c     d     e     f
+    ## a  TRUE  TRUE FALSE FALSE  TRUE FALSE
+    ## b  TRUE  TRUE FALSE FALSE FALSE FALSE
+    ## c FALSE FALSE FALSE FALSE FALSE  TRUE
+    ## d FALSE FALSE FALSE  TRUE  TRUE  TRUE
+    ## e  TRUE FALSE FALSE  TRUE FALSE FALSE
+    ## f FALSE FALSE  TRUE  TRUE FALSE FALSE
+
+``` r
+diag(U)
+```
+
+    ##     a     b     c     d     e     f 
+    ##  TRUE  TRUE FALSE  TRUE FALSE FALSE
+
+``` r
+diag(U, names = FALSE)
+```
+
+    ## [1]  TRUE  TRUE FALSE  TRUE FALSE FALSE
+
+## `diag<-` method tests

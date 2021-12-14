@@ -106,20 +106,23 @@ setMethod("as.logical", signature(x = "ldenseMatrix"),
 
 setMethod("diag", signature(x = "lgeMatrix"),
 	  function(x, nrow, ncol) .Call(lgeMatrix_getDiag, x))
-
 setMethod("diag", signature(x = "lsyMatrix"),
 	  function(x, nrow, ncol) .Call(lgeMatrix_getDiag, x))
-setMethod("diag", signature(x = "lspMatrix"),
-	  function(x, nrow, ncol) .Call(lspMatrix_getDiag, x))
-
 setMethod("diag", signature(x = "ltrMatrix"),
           function(x, nrow, ncol) .Call(ltrMatrix_getDiag, x))
-setMethod("diag", signature(x = "ltpMatrix"),
-          function(x, nrow, ncol) .Call(ltpMatrix_getDiag, x))
+for (.x.cl in sprintf("n%sMatrix", c("ge", "sy", "tr"))) {
+    setMethod("diag", signature(x = .x.cl),# << the "same"
+              function(x, nrow, ncol) diag(as(x, "ldenseMatrix")))
+}
+rm(.x.cl)
 
-
-setMethod("diag", signature(x = "ndenseMatrix"),# << the "same"
-          function(x, nrow, ncol) diag(as(x, "ldenseMatrix")))
+## MJ: No longer needed ... replacement in R/packedMatrix.R
+## setMethod("diag", signature(x = "lspMatrix"),
+## 	     function(x, nrow, ncol) .Call(lspMatrix_getDiag, x))
+## setMethod("diag", signature(x = "ltpMatrix"),
+##           function(x, nrow, ncol) .Call(ltpMatrix_getDiag, x))
+## setMethod("diag", signature(x = "ndenseMatrix"),# << the "same"
+##           function(x, nrow, ncol) diag(as(x, "ldenseMatrix")))
 
 
 ## --- *SETTING* of diagonal :  diag(x) <- value ---------
@@ -158,6 +161,12 @@ rm(.diag.set.ltr, .diag.set.ltp)
 setMethod("t", signature(x = "lgeMatrix"), t_geMatrix)
 setMethod("t", signature(x = "ltrMatrix"), t_trMatrix)
 setMethod("t", signature(x = "lsyMatrix"), t_trMatrix)
+
+## MJ: No longer needed ... replacement in R/packedMatrix.R
+## setMethod("t", signature(x = "ltpMatrix"),
+##           function(x) as(t(as(x, "ltrMatrix")), "ltpMatrix"))
+## setMethod("t", signature(x = "lspMatrix"),
+##           function(x) as(t(as(x, "lsyMatrix")), "lspMatrix"))
 
 ## NOTE:  "&" and "|"  are now in group "Logic" c "Ops" --> ./Ops.R
 ##        "!" is in ./not.R

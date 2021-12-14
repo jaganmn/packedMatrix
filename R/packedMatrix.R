@@ -521,32 +521,12 @@ rm(.i.map, .j.map, .i.cl, .j.cl, .op, .nm0, .nm1)
 
 setMethod("t", signature(x = "packedMatrix"),
           function(x) .Call(packedMatrix_t, x))
-
-## These methods are obviously much slower than the existing methods
-## implemented in C, but they _are_ slightly more faithful to the
-## base functions (handling of names, coercion, invalid input, etc.).
-## Keeping here in case anything can be borrowed to improve existing
-## methods...
-if (FALSE) {
 setMethod("diag", signature(x = "packedMatrix"),
           function(x, nrow, ncol, names) {
-              n <- x@Dim[1L]
-              if (is(x, "triangularMatrix") && x@diag == "U") {
-                  res <- rep.int(as1(x@x), n)
-              } else {
-                  i <- seq_len(n)
-                  k <- .pM.arity21(i, i, n = n, up = x@uplo == "U")
-                  res <- x@x[k]
-              }
-              if (isTRUE(names)) {
-                  dn <- dimnames(x)
-                  if (!is.null(dn[[1L]]) && !is.null(dn[[2L]]) &&
-                      isTRUE(all(dn[[1L]] == dn[[2L]]))) {
-                      names(res) <- dn[[1L]]
-                  }
-              }
-              res
+              .Call(packedMatrix_diag_get, x, isTRUE(names[1L]))
           })
+
+if (FALSE) {
 setMethod("diag<-", signature(x = "packedMatrix"),
           function(x, value) {
               n <- x@Dim[1L]

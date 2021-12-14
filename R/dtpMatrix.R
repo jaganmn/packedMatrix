@@ -34,9 +34,11 @@ setMethod("determinant", signature(x = "dtpMatrix", logarithm = "missing"),
 setMethod("determinant", signature(x = "dtpMatrix", logarithm = "logical"),
 	  function(x, logarithm, ...) mkDet(diag(x), logarithm))
 
-setMethod("diag", signature(x = "dtpMatrix"),
-	  function(x, nrow, ncol) .Call(dtpMatrix_getDiag, x),
-	  valueClass = "numeric")
+## MJ: No longer needed ... replacement in R/packedMatrix.R
+## setMethod("diag", signature(x = "dtpMatrix"),
+## 	  function(x, nrow, ncol) .Call(dtpMatrix_getDiag, x),
+## 	  valueClass = "numeric")
+
 setMethod("diag<-", signature(x = "dtpMatrix"),
 	  function(x, value) {
 	      .Call(dtpMatrix_setDiag,
@@ -74,3 +76,8 @@ setMethod("solve", signature(a = "dtpMatrix", b="ddenseMatrix"),
 setMethod("solve", signature(a = "dtpMatrix", b="matrix"),
 	  function(a, b, ...) .Call(dtpMatrix_matrix_solve, a, b),
 	  valueClass = "dgeMatrix")
+
+## MJ: No longer needed ... replacement in R/packedMatrix.R
+## ## FIXME: speed up
+## setMethod("t", "dtpMatrix",
+##           function(x) dtr2dtp(t(dtp2dtr(x))), valueClass = "dtpMatrix")

@@ -12,68 +12,64 @@ Based on discussion on R-devel beginning
 [here](https://stat.ethz.ch/pipermail/r-devel/2021-November/081261.html)
 and continued privately with Martin Mächler.
 
-## Utilities
+## Class definition
 
-A basic helper for constructing `"packedMatrix"`, 
-a virtual superclass of `"[dln][st]pMatrix"`:
-
-```{r utils1, echo = TRUE} 
-## Construct an 'n'-by-'n' "dspMatrix" storing a sequence of integers
-newDsp <- function(n) {
-  x <- as.double(seq_len(choose(n + 1L, 2L)))
-  new("dspMatrix", uplo = "U", x = x, Dim = c(n, n),
-      Dimnames = list(A = sprintf("i%d", seq_len(n)), B = NULL))
-}
+```{r showClass}
+library("Matrix")
+showClass("packedMatrix")
 ```
 
-And two nonstandard evaluation tricks to avoid code duplication in
-tests:
+## Utilities for tests
 
-```{r utils2, echo=TRUE}
-## For each call FUN(<packedMatrix>, ...) passed as argument,
-## test equivalence to FUN(as(<packedMatrix>, "matrix"), ...)
-checkEquiv <- function(...) {
-  e <- parent.frame()
-  equiv1 <- function(x1) {
-    stopifnot(is.call(x1) && length(x1) > 1L)
+`checkEquiv` takes as an argument a list of calls `FUN(x, ...)` 
+and returns a logical vector of the same length, indicating whether 
+the values of `FUN(x, ...)` are consistent with the values of
+`FUN(as(x, "matrix"), ...)`. (Here, _consistent_ means identical 
+modulo a coercion from `"Matrix"` to `"matrix"`.)
+
+```{r utils1}
+checkEquiv <- function(exprs) {
+  f <- function(x1, envir) {
+    stopifnot(is.call(x1), length(x1) > 1L)
     x2 <- x1
     x2[[2L]] <- call("as", x2[[2L]], "matrix") 
-    m1 <- eval(x1, e)
-    m2 <- eval(x2, e)
+    m1 <- eval(x1, envir)
+    m2 <- eval(x2, envir)
     if (is(m1, "Matrix")) {
       m1 <- as(m1, "matrix")
     }
     identical(m1, m2)
   }
-  l <- as.list(match.call())[-1L]
-  res <- vapply(l, equiv1, NA)
-  names(res) <- vapply(l, deparse1, "")
+  res <- vapply(exprs, f, NA, parent.frame())
+  names(res) <- vapply(exprs, deparse, "")
   res
-}
-
-## Benchmark the calls FUN(<packedMatrix>, ...) passed as arguments,
-## together with the calls FUN(as(<packedMatrix>, "matrix"), ...)
-checkTimes <- function(..., times = 100L) {
-  e <- parent.frame()
-  f <- function(x) {
-    stopifnot(is.call(x) && length(x) > 1L)
-    x[[2L]] <- call("as", x[[2L]], "matrix")
-    x
-  }
-  l1 <- as.list(match.call())[-1L]
-  l1[["times"]] <- NULL
-  l2 <- vector("list", 2L * length(l1))
-  l2[c(TRUE, FALSE)] <- l1
-  l2[c(FALSE, TRUE)] <- lapply(l1, f)
-  cl <- as.call(c(list(quote(microbenchmark::microbenchmark)), l2, list(times = times)))
-  eval(cl, e)
 }
 ```
 
-## Subset tests
+`checkTimes` takes as an argument a list of calls `FUN(x, ...)` 
+and returns a benchmark comparing their evaluation times to
+those of the calls `FUN(as(x, "matrix"), ...)`.
 
-For `"packedMatrix"`, the subset operator ```[``` avoids coercion to 
-`"matrix"` in many special cases. Here is a list of subset operations
+```{r utils2}
+checkTimes <- function(exprs, times = 100L) {
+  stopifnot(requireNamespace("microbenchmark"))
+  f <- function(x) {
+    stopifnot(is.call(x), length(x) > 1L)
+    x[[2L]] <- call("as", x[[2L]], "matrix")
+    x
+  }
+  l <- vector("list", 2L * length(exprs))
+  l[c(TRUE, FALSE)] <- exprs
+  l[c(FALSE, TRUE)] <- lapply(exprs, f)
+  l <- c(list(quote(microbenchmark::microbenchmark)), l, list(times = times))
+  eval(as.call(l), parent.frame())
+}
+```
+
+## `[` method tests
+
+For `"packedMatrix"`, the subset operator ```[``` avoids coercion 
+to `"matrix"` in many special cases. Here is a list of operations
 to be tested.
 
 ```{r subset1}
@@ -115,38 +111,64 @@ We start by checking that the `"packedMatrix"` subset is consistent
 with the subset via `"matrix"`.
 
 ```{r subset2}
-library("Matrix")
-S <- newDsp(10L)
-all(do.call(checkEquiv, exprs))
+n <- 10L
+S <- new("dspMatrix", uplo = "U", x = as.double(seq_len(choose(n + 1L, 2L))),
+         Dim = c(n, n), Dimnames = list(A = sprintf("i%d", seq_len(n)), B = NULL))
+all(checkEquiv(exprs))
 ```
 
-Now we check that, in many cases, the `"packedMatrix"` subset is faster.
+Now we test its performance against the subset via `"matrix"`.
 
 ```{r subset3, echo=-1}
 options(width = 500L)
-S <- newDsp(1000L)
-do.call(checkTimes, exprs)
+n <- 1000L
+S <- new("dspMatrix", uplo = "U", x = as.double(seq_len(choose(n + 1L, 2L))),
+         Dim = c(n, n), Dimnames = list(A = sprintf("i%d", seq_len(n)), B = NULL))
+checkTimes(exprs)
 ```
 
-The `"packedMatrix"` subset is slower in some cases because priority is 
-given to memory efficiency:
+The `"packedMatrix"` subset is slower in some cases because:
+
+* It is implemented in R rather than C (for now).
+* It takes extra steps to avoid a coercion to `"matrix"`.
+
+However, for large enough `n`, there is no comparison...
 
 ```{r subset4, error=TRUE}
-S <- newDsp(30000L)
+n <- 30000L
 i <- replace(logical(1000L), 1L, TRUE)
+S <- new("dspMatrix", uplo = "U", x = as.double(seq_len(choose(n + 1L, 2L))), Dim = c(n, n))
 {S[i]; cat("done!\n")}
 {as(S, "matrix")[i]; cat("done!\n")}
 ```
 
-## Transpose tests
+## `t` method tests
 
 ```{r transpose1}
-S <- newDsp(1000L)
-identical(as(t(S), "matrix"), t(as(S, "matrix")))
-microbenchmark::microbenchmark(t(S), as(t(as(S, "dsyMatrix")), "dspMatrix"))
+selectMethod("t", signature(x = "packedMatrix"))
+n <- 1000L
+L <- new("dtpMatrix", uplo = "L", x = as.double(seq_len(choose(n + 1L, 2L))), 
+         Dim = c(n, n), Dimnames = list(A = NULL, B = sprintf("j%d", seq_len(n))))
+identical(as(t(L), "matrix"), t(as(L, "matrix")))
+microbenchmark::microbenchmark(t(L), as(t(as(L, "dtrMatrix")), "dtpMatrix"))
 ```
 ```{r transpose2, error=TRUE}
-S <- newDsp(30000L)
-{t(S); cat("done!\n")}
-{as(t(as(S, "dsyMatrix")), "dspMatrix"); cat("done!\n")}
+n <- 30000L
+L <- new("dtpMatrix", uplo = "L", x = as.double(seq_len(choose(n + 1L, 2L))), Dim = c(n, n))
+{t(L); cat("done!\n")}
+{as(t(as(L, "dtrMatrix")), "dtpMatrix"); cat("done!\n")}
 ```
+
+## `diag` method tests
+
+```{r diag1}
+selectMethod("diag", signature(x = "packedMatrix"))
+n <- 6L
+U <- new("lspMatrix", uplo = "U", x = sample(c(TRUE, FALSE), choose(n + 1L, 2L), TRUE),
+         Dim = c(n, n), Dimnames = list(letters[1:6], NULL))
+U
+diag(U)
+diag(U, names = FALSE)
+```
+
+## `diag<-` method tests
