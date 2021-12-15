@@ -4,7 +4,6 @@
 ##   the "matrix" subset tolerates nonsense input but the "Matrix" subset
 ##   need not emulate that ...
 ## * most operations could/should be implemented in C for efficiency ...
-## * unify existing diag and diag<- methods for "[dln][st]pMatrix" ??
 
 ## NTS:
 ## * need to use dimnames(x) instead of x@Dimnames to get symmetric
@@ -522,31 +521,6 @@ rm(.i.map, .j.map, .i.cl, .j.cl, .op, .nm0, .nm1)
 setMethod("t", signature(x = "packedMatrix"),
           function(x) .Call(packedMatrix_t, x))
 setMethod("diag", signature(x = "packedMatrix"),
-          function(x, nrow, ncol, names) {
-              .Call(packedMatrix_diag_get, x, isTRUE(names[1L]))
-          })
-
-if (FALSE) {
+          function(x, nrow, ncol, names) .Call(packedMatrix_diag_get, x, names))
 setMethod("diag<-", signature(x = "packedMatrix"),
-          function(x, value) {
-              n <- x@Dim[1L]
-              if (!is.numeric(value) && !is.logical(value)) {
-                  stop("replacement diagonal has wrong type")
-              }
-              nv <- length(value)
-              if (nv != 1L && nv != n) {
-                  stop("replacement diagonal has wrong length")
-              }
-              if (is.numeric(value) && !is(x, "dMatrix")) {
-                  x <- as(x, "dMatrix")
-              }
-              if (is(x, "triangularMatrix")) {
-                  x@diag <- "N"
-              }
-              i <- seq_len(n)
-              k <- .pM.arity21(i, i, n = n, up = x@uplo == "U")
-              x@x[k] <- value
-              x
-          })
-}
-
+          function(x, value) .Call(packedMatrix_diag_set, x, value))

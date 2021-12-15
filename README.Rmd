@@ -163,12 +163,27 @@ L <- new("dtpMatrix", uplo = "L", x = as.double(seq_len(choose(n + 1L, 2L))), Di
 
 ```{r diag1}
 selectMethod("diag", signature(x = "packedMatrix"))
-n <- 6L
-U <- new("lspMatrix", uplo = "U", x = sample(c(TRUE, FALSE), choose(n + 1L, 2L), TRUE),
-         Dim = c(n, n), Dimnames = list(letters[1:6], NULL))
+n <- 4L
+U <- new("lspMatrix", uplo = "U", x = rep_len(c(TRUE, FALSE, NA), choose(n + 1L, 2L)),
+         Dim = c(n, n), Dimnames = list(letters[seq_len(n)], NULL))
 U
 diag(U)
 diag(U, names = FALSE)
 ```
 
 ## `diag<-` method tests
+
+```{r diag2, error=TRUE}
+selectMethod("diag<-", signature(x = "packedMatrix"))
+U
+diag(U) <- logical(n)
+U
+diag(U) <- TRUE
+U
+diag(U) <- 1 # 'x@x' coerced to 'typeof(value)'
+U
+diag(U) <- TRUE # 'value' coerced to 'typeof(x@x)'
+U
+diag(U) <- double(2L) # right type, wrong length
+diag(U) <- vector("list", n) # right length, wrong type
+```

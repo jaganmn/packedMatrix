@@ -71,7 +71,6 @@ setMethod("norm", signature(x = "dspMatrix", type = "missing"),
 ##           valueClass = "dspMatrix")
 ## setMethod("diag", signature(x = "dspMatrix"),
 ##           function(x, nrow, ncol) .Call(dspMatrix_getDiag, x))
-
-setMethod("diag<-", signature(x = "dspMatrix"),
-	  function(x, value) .Call(dspMatrix_setDiag, x, value))
+## setMethod("diag<-", signature(x = "dspMatrix"),
+##           function(x, value) .Call(dspMatrix_setDiag, x, value))
 
