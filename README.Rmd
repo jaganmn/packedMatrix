@@ -12,6 +12,12 @@ Based on discussion on R-devel beginning
 [here](https://stat.ethz.ch/pipermail/r-devel/2021-November/081261.html)
 and continued privately with Martin Mächler.
 
+## Viewing changes relative to r3419
+
+```bash
+$ git diff --compact-summary 2f64f5f HEAD
+```
+
 ## Class definition
 
 ```{r showClass}
@@ -164,26 +170,26 @@ L <- new("dtpMatrix", uplo = "L", x = as.double(seq_len(choose(n + 1L, 2L))), Di
 ```{r diag1}
 selectMethod("diag", signature(x = "packedMatrix"))
 n <- 4L
-U <- new("lspMatrix", uplo = "U", x = rep_len(c(TRUE, FALSE, NA), choose(n + 1L, 2L)),
+S <- new("lspMatrix", uplo = "U", x = rep_len(c(TRUE, FALSE, NA), choose(n + 1L, 2L)),
          Dim = c(n, n), Dimnames = list(letters[seq_len(n)], NULL))
-U
-diag(U)
-diag(U, names = FALSE)
+S
+diag(S)
+diag(S, names = FALSE)
 ```
 
 ## `diag<-` method tests
 
 ```{r diag2, error=TRUE}
 selectMethod("diag<-", signature(x = "packedMatrix"))
-U
-diag(U) <- logical(n)
-U
-diag(U) <- TRUE
-U
-diag(U) <- 1 # 'x@x' coerced to 'typeof(value)'
-U
-diag(U) <- TRUE # 'value' coerced to 'typeof(x@x)'
-U
-diag(U) <- double(2L) # right type, wrong length
-diag(U) <- vector("list", n) # right length, wrong type
+S
+diag(S) <- logical(n)
+S
+diag(S) <- TRUE
+S
+diag(S) <- 1 # 'x' coerced to "d?pMatrix"
+S
+diag(S) <- TRUE # 'value' coerced to double
+S
+diag(S) <- double(2L) # right type, wrong length
+diag(S) <- vector("list", n) # right length, wrong type
 ```
