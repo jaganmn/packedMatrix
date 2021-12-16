@@ -186,7 +186,7 @@ diag(S) <- logical(n)
 S
 diag(S) <- TRUE
 S
-diag(S) <- 1 # 'x' coerced to "d?pMatrix"
+diag(S) <- 1 # 'x' coerced to "dspMatrix"
 S
 diag(S) <- TRUE # 'value' coerced to double
 S
