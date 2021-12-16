@@ -17,7 +17,7 @@
 }
 .pM.error.ist <- function(i) {
     if (isS4(i)) {
-        stop(sprintf("invalid subscript S4 class '%s%'", class(i)))
+        stop(sprintf("invalid subscript (S4) class '%s%'", class(i)))
     } else {
         stop(sprintf("invalid subscript type '%s%'", typeof(i)))
     }
@@ -30,9 +30,9 @@
 ## [k] integer index of x[upper.tri(x, TRUE)] or x[lower.tri(x, TRUE)]
 .pM.arity21 <- function(i, j, n, up) {
     if (up) {
-        i + ((j - 1L) * j) %/% 2L            # i <= j
+        i + ((j - 1L) * j) %/% 2L            # needs i <= j
     } else {
-        i + ((j - 1L) * (2L * n - j)) %/% 2L # i >= j
+        i + ((j - 1L) * (2L * n - j)) %/% 2L # needs i >= j
     }
 }
 
@@ -76,48 +76,74 @@
 ## 1: 2-ary indexing with one of 'i', 'j' missing, as in x[i, , drop=]
 ## 2: 2-ary indexing with neither 'i' nor 'j' missing, as in x[i, j, drop=]
 ## class=
-##        index: vector index [dispatches to chr,logi,num]
+##        index: vector index [includes factor, dispatches to chr,logi,num]
 ## chr,logi,num: vector index
 ##          mat: matrix, Matrix, or array index
 ##         null: NULL index
 
+
+## Mainly to avoid defining methods for each "index" subclass,
+## at the (reasonable?) cost of having to repeat dispatch ...
 .pM.sub0.index <- function(x, i) {
-    if (is.numeric(i)) {
-        .pM.sub0.num(x, i)
-    } else if (is.logical(i)) {
-        .pM.sub0.logi(x, i)
-    } else if (is.character(i)) {
-        .pM.sub0.chr(x, i)
-    } else {
-        .pM.error.ist(i)
-    }
+    switch(mode(i),
+           numeric =
+               {
+                   if (!is.numeric(i)) {
+                       ## e.g., is.factor(i)
+                       ## in part to avoid a confusing error message like
+                       ## > invalid subscript type <integer|double>
+                       ## though if supporting factor indices is undesirable
+                       ## then one _could_ just throw an error like
+                       ## > invalid subscript class <class(i)>
+                       ## when 'mode(i)' is "numeric" but 'is.numeric(i)'
+                       ## is FALSE
+                       class(i) <- NULL
+                   }
+                   .pM.sub0.num(x, i)
+               },
+           logical = .pM.sub0.logi(x, i),
+           character = .pM.sub0.chr(x, i),
+           .pM.error.ist(i))
 }
-
 .pM.sub1.index <- function(x, i, drop, col) {
-    if (is.numeric(i)) {
-        .pM.sub1.num(x, i, drop = drop, col = col)
-    } else if (is.logical(i)) {
-        .pM.sub1.logi(x, i, drop = drop, col = col)
-    } else if (is.character(i)) {
-        .pM.sub1.chr(x, i, drop = drop, col = col)
-    } else {
-        .pM.error.ist(i)
-    }
+    switch(mode(i),
+           numeric =
+               {
+                   if (!is.numeric(i)) {
+                       ## see comment above
+                       class(i) <- NULL
+                   }
+                   .pM.sub1.num(x, i, drop = drop, col = col)
+               },
+           logical = .pM.sub1.logi(x, i, drop = drop, col = col),
+           character = .pM.sub1.chr(x, i, drop = drop, col = col),
+           .pM.error.ist(i))
 }
 
+## Emulating 'stringSubscript' in R's subscript.c,
+## though 'x[<character but not array>]' is quite
+## pathological and really need not be supported ...
 .pM.sub0.chr <- function(x, i) {
     rep.int(x@x[1L][NA], length(i))
 }
-
 .pM.sub1.chr <- function(x, i, drop, col) {
-    i <- match(i, dimnames(x)[[1L + col]])
-    if (anyNA(i)) {
-        .pM.error.oob()
+    ## FIXME: error handling costs one additional loop over 'i':
+    ## we don't need 'match' to return if it detects a nonmatch ...
+    ## best done in C ...
+    if (length(i) > 0L) {
+        nms <- dimnames(x)[[1L + col]]
+        if (is.null(nms) || anyNA(i <- match(i, nms))) {
+            .pM.error.oob()
+        }
+        .pM.sub1.num(x, i, drop = drop, col = col)
+    } else {
+        .pM.sub1.num(x, integer(0L), drop = drop, col = col)
     }
-    ## dispatch
-    .pM.sub1.num(x, i, drop = drop, col = col)
 }
 
+## These _really_ should be translated to C for efficient recycling
+## of short logical vectors ... currently resorting to acrobatics
+## in order to remain efficient in just a few special cases ...
 .pM.sub0.logi <- function(x, i) {
     ni <- length(i)
     if (ni == 0L) {
@@ -128,6 +154,7 @@
     if (n <= 1L) {
         return(x@x[i])
     }
+    ## _these_ optimizations cost 2-3 loops over 'i' ...
     if (anyNA(i)) {
         ## optimize x[NA], etc.
         if (all(is.na(i))) {
@@ -148,9 +175,11 @@
         }
     }
     ## dispatch
+    ## FIXME: inefficient ... best done in C ...
+    ## though notably still an improvement over 'as(x, "matrix")[i]'
+    ## which allocates a double vector of length n*n when 'x' is a "dMatrix"
     .pM.sub0.num(x, seq_len(n * n)[i])
 }
-
 .pM.sub1.logi <- function(x, i, drop, col) {
     p <- 1L + col # subset on this dimension
     pp <- 1L + !col # but not this one
@@ -200,6 +229,8 @@
     .pM.sub1.num(x, seq_len(n)[i], drop = drop, col = col)
 }
 
+## Inefficient for negative 'i',
+## a C implementation could also avoid constructing 'ij', etc.
 .pM.sub0.num <- function(x, i) {
     if (length(i) == 0L) {
         return(x@x[0L])
@@ -214,6 +245,7 @@
         i <- seq_len(n * n)[i]
     } else {
         if (is.double(i)) {
+            ## FIXME: is 'storage.mode<-' better here?
             i <- as.integer(i)
         }
         i <- i[i > 0L]
@@ -223,6 +255,8 @@
     .pM.sub0.ij(x, ij)
 }
 
+## A lot of acrobatics/complexity here ... should simplify but
+## perhaps not worth the effort if implementing in C anyway ...
 .pM.sub1.num <- function(x, i, drop, col) {
     p <- 1L + col # subset on this dimension
     pp <- 1L + !col # but not this one
@@ -242,17 +276,6 @@
             dn[p] <- list(NULL)
         }
         return(new(geClass(x), x = x@x[0L], Dim = d, Dimnames = dn))
-    }
-    if (ni == n && !anyNA(i) && all(i == seq_len(n))) { # x[seq_len(nrow(x)), , drop=]
-        if (ni == 1L && !isFALSE(drop[1L])) {
-            x0 <- x@x
-            if (!is.null(dn[[pp]])) {
-                names(x0) <- dn[[pp]]
-            }
-            return(x0)
-        } else {
-            return(x)
-        }
     }
     notna <- !is.na(i)
     nnotna <- sum(notna)
@@ -397,7 +420,8 @@
     }
 }
 
-## Could support "[dln]Matrix" and "array" ... leaving out for now
+## Could support "[dln]Matrix" and "array", which would also be handled
+## like vectors ... leaving out for now
 .pM.sub1.mat <- function(x, i, drop, col) {
     ## if (is.numeric(i) || is(i, "dMatrix")) {
     if (is.numeric(i)) {
@@ -416,7 +440,6 @@
 .pM.sub0.null <- function(x, i) {
     .pM.sub0.num(x, integer(0L))
 }
-
 .pM.sub1.null <- function(x, i, drop, col) {
     .pM.sub1.num(x, integer(0L), drop = drop, col = col)
 }
