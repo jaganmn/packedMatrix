@@ -1,8 +1,8 @@
 ## TODO/IDEAS:
-## * we would really benefit from reusing some of the machinery
+## * we would potentially benefit from reusing some of the machinery
 ##   in R_MAIN_DIR/subscript.c to convert supplied subscripts to
-##   "nice" in-bounds integer subscripts, which are necessary to
-##   compute "triangular" subscripts
+##   "nice" in-bounds integer subscripts, which are necessary to compute
+##   "triangular" subscripts
 ##
 ## * methods for x[i, j] and x[i, j, drop=] with neither i nor j missing ??
 ## * haven't given much thought to long vector support ...
@@ -33,6 +33,7 @@
 
 ## convert [i, j] integer index of triangular 'n'-by-'n' matrix 'x' to
 ## [k] integer index of x[upper.tri(x, TRUE)] or x[lower.tri(x, TRUE)]
+## ... can be deleted once '.pM.sub0.ij' is implemented in C
 .pM.arity21 <- function(i, j, n, up) {
     if (up) {
         i + ((j - 1L) * j) %/% 2L            # needs 1 <= i <= j <= n
@@ -43,6 +44,7 @@
 
 ## do x[ij] efficiently where 'ij' is a two-column integer matrix
 ## containing only integers in '1:dim(x)[1L]' or NA
+## FIXME: implement in C
 .pM.sub0.ij <- function(x, ij) {
     ## deal with [i, j] outside of ("opposite") stored triangle
     up <- x@uplo == "U"
@@ -144,6 +146,7 @@
     if (n <= 1L) {
         return(x@x[i])
     }
+    ## FIXME: not sure how useful these optimizations are in practice ...
     if (anyNA(i)) {
         ## optimize x[NA], etc.
         if (all(is.na(i))) {
@@ -164,7 +167,7 @@
         }
     }
     ## dispatch
-    ## FIXME: inefficient ... see TODO about adapting 'makeSubscript'
+    ## FIXME: inefficient ... is 'R_MAIN_DIR/subscript.c' machinery better?
     ## though notably still an improvement over 'as(x, "matrix")[i]'
     ## which allocates a double vector of length n*n when 'x' is a "dMatrix"
     .pM.sub0.num(x, seq_len(n * n)[i])
@@ -187,6 +190,7 @@
     if (ni > n) {
         stop("logical subscript too long")
     }
+    ## FIXME: not sure how useful these optimizations are in practice ...
     if (anyNA(i)) {
         ## optimize x[NA, ], etc.
         if (all(is.na(i))) {
@@ -227,10 +231,8 @@
     if (n <= 1L) {
         return(x@x[i])
     }
-    ## take care of nonpositive and noninteger values:
-    ## after this, 'i' contains only elements in 'c(NA, 1:(n*n))'
+    ## FIXME: inefficient ... is 'R_MAIN_DIR/subscript.c' machinery better?
     if (any(i < 0, na.rm = TRUE)) {
-        ## FIXME: inefficient ... see TODO about adapting 'makeSubscript'
         i <- seq_len(n * n)[i]
     } else {
         if (is.double(i)) {
@@ -239,30 +241,15 @@
         i <- i[i > 0L]
         i[i > n * n] <- NA
     }
+    ## Expects "nice" indices ... in-bounds integers and NA only
     .Call(packedMatrix_sub0, x, i)
 }
-
-## A lot of acrobatics/complexity here ... should simplify but
-## perhaps not worth the effort if implementing in C anyway ...
 .pM.sub1.num <- function(x, i, drop, col) {
-    d <- x@Dim
-    n <- d[1L]
-    if (any(i >= n + 1, na.rm = TRUE)) {
+    if (any(i >= x@Dim[1L] + 1L, na.rm = TRUE)) {
         .pM.error.oob()
     }
-    ## take care of nonpositive and noninteger values:
-    ## after this, 'i' contains only elements in 'c(NA, 1:n)'
-    i <- seq_len(n)[i]
-    if (length(i) == 0L) { # x[integer(0), , drop=]
-        dn <- dimnames(x)
-        if (n > 0L) {
-            p <- 1L + col # subset on this dimension
-            d[p] <- 0L
-            dn[p] <- list(NULL)
-        }
-        return(new(geClass(x), x = x@x[0L], Dim = d, Dimnames = dn))
-    }
-    .Call(packedMatrix_sub1, x, i, drop, col)
+    ## Expects "nice" indices ... in-bounds integers and NA only
+    .Call(packedMatrix_sub1, x, seq_len(n)[i], drop, col)
 }
 
 ## Could support "[dn]Matrix" and "array" ... leaving out for now
