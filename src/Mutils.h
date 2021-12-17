@@ -191,7 +191,7 @@ void SET_DimNames_symm(SEXP dest, SEXP src);
 
 #define uplo_P(_x_) CHAR(STRING_ELT(GET_SLOT(_x_, Matrix_uploSym), 0))
 #define diag_P(_x_) CHAR(STRING_ELT(GET_SLOT(_x_, Matrix_diagSym), 0))
-#define Diag_P(_x_) (R_has_slot(x, Matrix_diagSym) ?			\
+#define Diag_P(_x_) (R_has_slot(_x_, Matrix_diagSym) ?			\
 		     CHAR(STRING_ELT(GET_SLOT(_x_, Matrix_diagSym), 0)) : " ")
 #define class_P(_x_) CHAR(asChar(getAttrib(_x_, R_ClassSymbol)))
 

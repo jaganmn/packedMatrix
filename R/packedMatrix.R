@@ -1,10 +1,15 @@
-## TODO:
+## TODO/IDEAS:
+## * we would really benefit from reusing some of the machinery
+##   in R_MAIN_DIR/subscript.c to convert supplied subscripts to
+##   "nice" in-bounds integer subscripts, which are necessary to
+##   compute "triangular" subscripts
+##
 ## * methods for x[i, j] and x[i, j, drop=] with neither i nor j missing ??
-## * think about what edge cases of `[` are actually worth maintaining ...
-##   the "matrix" subset tolerates nonsense input but the "Matrix" subset
-##   need not emulate that ...
-## * most operations could/should be implemented in C for efficiency ...
-
+## * haven't given much thought to long vector support ...
+## * ditto subassignment ...
+## * an efficient 'apply' analogue for "packedMatrix" should be relatively
+##   easy to implement now that row/column extraction are fast
+##
 ## NTS:
 ## * need to use dimnames(x) instead of x@Dimnames to get symmetric
 ##   dimnames when dealing with "symmetricMatrix"
@@ -30,9 +35,9 @@
 ## [k] integer index of x[upper.tri(x, TRUE)] or x[lower.tri(x, TRUE)]
 .pM.arity21 <- function(i, j, n, up) {
     if (up) {
-        i + ((j - 1L) * j) %/% 2L            # needs i <= j
+        i + ((j - 1L) * j) %/% 2L            # needs 1 <= i <= j <= n
     } else {
-        i + ((j - 1L) * (2L * n - j)) %/% 2L # needs i >= j
+        i + ((j - 1L) * (2L * n - j)) %/% 2L # needs 1 <= j <= i <= n
     }
 }
 
@@ -81,22 +86,14 @@
 ##          mat: matrix, Matrix, or array index
 ##         null: NULL index
 
-
-## Mainly to avoid defining methods for each "index" subclass,
-## at the (reasonable?) cost of having to repeat dispatch ...
+## Mainly to avoid defining methods for each "index" subclass
+## separately, at the (reasonable?) cost of having to dispatch
+## on index type ourselves ...
 .pM.sub0.index <- function(x, i) {
     switch(mode(i),
            numeric =
                {
                    if (!is.numeric(i)) {
-                       ## e.g., is.factor(i)
-                       ## in part to avoid a confusing error message like
-                       ## > invalid subscript type <integer|double>
-                       ## though if supporting factor indices is undesirable
-                       ## then one _could_ just throw an error like
-                       ## > invalid subscript class <class(i)>
-                       ## when 'mode(i)' is "numeric" but 'is.numeric(i)'
-                       ## is FALSE
                        class(i) <- NULL
                    }
                    .pM.sub0.num(x, i)
@@ -110,7 +107,6 @@
            numeric =
                {
                    if (!is.numeric(i)) {
-                       ## see comment above
                        class(i) <- NULL
                    }
                    .pM.sub1.num(x, i, drop = drop, col = col)
@@ -120,16 +116,13 @@
            .pM.error.ist(i))
 }
 
-## Emulating 'stringSubscript' in R's subscript.c,
-## though 'x[<character but not array>]' is quite
-## pathological and really need not be supported ...
+## Emulating 'stringSubscript' in R_MAIN_DIR/subscript.c,
+## though the first case, 'x[<character but not array>]',
+## is quite pathological and really need not be supported ...
 .pM.sub0.chr <- function(x, i) {
     rep.int(x@x[1L][NA], length(i))
 }
 .pM.sub1.chr <- function(x, i, drop, col) {
-    ## FIXME: error handling costs one additional loop over 'i':
-    ## we don't need 'match' to return if it detects a nonmatch ...
-    ## best done in C ...
     if (length(i) > 0L) {
         nms <- dimnames(x)[[1L + col]]
         if (is.null(nms) || anyNA(i <- match(i, nms))) {
@@ -141,9 +134,6 @@
     }
 }
 
-## These _really_ should be translated to C for efficient recycling
-## of short logical vectors ... currently resorting to acrobatics
-## in order to remain efficient in just a few special cases ...
 .pM.sub0.logi <- function(x, i) {
     ni <- length(i)
     if (ni == 0L) {
@@ -154,7 +144,6 @@
     if (n <= 1L) {
         return(x@x[i])
     }
-    ## _these_ optimizations cost 2-3 loops over 'i' ...
     if (anyNA(i)) {
         ## optimize x[NA], etc.
         if (all(is.na(i))) {
@@ -175,7 +164,7 @@
         }
     }
     ## dispatch
-    ## FIXME: inefficient ... best done in C ...
+    ## FIXME: inefficient ... see TODO about adapting 'makeSubscript'
     ## though notably still an improvement over 'as(x, "matrix")[i]'
     ## which allocates a double vector of length n*n when 'x' is a "dMatrix"
     .pM.sub0.num(x, seq_len(n * n)[i])
@@ -229,8 +218,6 @@
     .pM.sub1.num(x, seq_len(n)[i], drop = drop, col = col)
 }
 
-## Inefficient for negative 'i',
-## a C implementation could also avoid constructing 'ij', etc.
 .pM.sub0.num <- function(x, i) {
     if (length(i) == 0L) {
         return(x@x[0L])
@@ -240,125 +227,42 @@
     if (n <= 1L) {
         return(x@x[i])
     }
-    ## 'arrayInd' needs 'i' in '1:(n*n)'; it is periodic...
+    ## take care of nonpositive and noninteger values:
+    ## after this, 'i' contains only elements in 'c(NA, 1:(n*n))'
     if (any(i < 0, na.rm = TRUE)) {
+        ## FIXME: inefficient ... see TODO about adapting 'makeSubscript'
         i <- seq_len(n * n)[i]
     } else {
         if (is.double(i)) {
-            ## FIXME: is 'storage.mode<-' better here?
             i <- as.integer(i)
         }
         i <- i[i > 0L]
         i[i > n * n] <- NA
     }
-    ij <- arrayInd(i, .dim = c(n, n), useNames = FALSE)
-    .pM.sub0.ij(x, ij)
+    .Call(packedMatrix_sub0, x, i)
 }
 
 ## A lot of acrobatics/complexity here ... should simplify but
 ## perhaps not worth the effort if implementing in C anyway ...
 .pM.sub1.num <- function(x, i, drop, col) {
-    p <- 1L + col # subset on this dimension
-    pp <- 1L + !col # but not this one
     d <- x@Dim
-    dn <- dimnames(x)
     n <- d[1L]
     if (any(i >= n + 1, na.rm = TRUE)) {
         .pM.error.oob()
     }
     ## take care of nonpositive and noninteger values:
-    ## after this, 'i' contains only elements in 'c(NA, 1:nrow(x))'
+    ## after this, 'i' contains only elements in 'c(NA, 1:n)'
     i <- seq_len(n)[i]
-    ni <- length(i)
-    if (ni == 0L) { # x[integer(0), , drop=]
+    if (length(i) == 0L) { # x[integer(0), , drop=]
+        dn <- dimnames(x)
         if (n > 0L) {
+            p <- 1L + col # subset on this dimension
             d[p] <- 0L
             dn[p] <- list(NULL)
         }
         return(new(geClass(x), x = x@x[0L], Dim = d, Dimnames = dn))
     }
-    notna <- !is.na(i)
-    nnotna <- sum(notna)
-    if (nnotna == 0L) { # x[rep(NA_integer_, times), , drop=]
-        if (ni == 1L && !isFALSE(drop[1L])) {
-            x0 <- rep.int(x@x[1L][NA], n)
-            if (!is.null(dn[[pp]])) {
-                names(x0) <- dn[[pp]]
-            }
-            return(x0)
-        } else {
-            x0 <- rep.int(x@x[1L][NA], ni * n)
-            d[p] <- ni
-            if (!is.null(dn[[p]])) {
-                dn[[p]] <- rep.int(NA_character_, ni)
-            }
-            return(new(geClass(x), x = x0, Dim = d, Dimnames = dn))
-        }
-    }
-    if (nnotna == 1L) { # x[c(1L, rep(NA_integer_, times)), , drop=]
-        w <- which(notna)
-        i0 <- i[w]
-        up <- x@uplo == "U"
-        sy <- is(x, "symmetricMatrix") # otherwise "triangularMatrix"
-        if (sy) {
-            ## do not need to condition on 'col';
-            ## entries on one side of diagonal are transposed
-            ii <- jj <- seq_len(n)
-            ii[seq_len(i0)] <- jj[i0:n] <- i0
-            k <-
-                if (up) {
-                    .pM.arity21(jj, ii, n = n, up = up)
-                } else {
-                    .pM.arity21(ii, jj, n = n, up = up)
-                }
-            xk <- x@x[k]
-        } else {
-            ## need to condition on 'col';
-            ## entries on one side of diagonal are zero
-            ii <- seq_len(i0)
-            jj <- i0:n
-            k <-
-                if (up) {
-                    if (col) {
-                        .pM.arity21(ii, i0, n = n, up = up)
-                    } else {
-                        .pM.arity21(i0, jj, n = n, up = up)
-                    }
-                } else {
-                    if (col) {
-                        .pM.arity21(jj, i0, n = n, up = up)
-                    } else {
-                        .pM.arity21(i0, ii, n = n, up = up)
-                    }
-                }
-            xk <- vector(typeof(x@x), n)
-            xk[if (up + col == 1L) jj else ii] <- x@x[k]
-        }
-        if (ni == 1L && !isFALSE(drop[1L])) {
-            if (!is.null(dn[[pp]])) {
-                names(xk) <- dn[[pp]]
-            }
-            return(xk)
-        } else {
-            x0 <- rep.int(x@x[1L][NA], ni * n)
-            d[p] <- ni
-            if (!is.null(dn[[p]])) {
-                dn[[p]] <- replace(rep.int(NA_character_, ni), w, dn[[p]][i0])
-            }
-            if (col) {
-                x0[seq.int((w - 1L) * n + 1L, length.out = n)] <- xk
-            } else {
-                x0[seq.int(w, by = ni, length.out = n)] <- xk
-            }
-            return(new(geClass(x), x = x0, Dim = d, Dimnames = dn))
-        }
-    }
-    ## bail out for, e.g., x[1:2, , drop=]
-    if (col) {
-        as(x, geClass(x))[, i, drop = drop]
-    } else {
-        as(x, geClass(x))[i, , drop = drop]
-    }
+    .Call(packedMatrix_sub1, x, i, drop, col)
 }
 
 ## Could support "[dn]Matrix" and "array" ... leaving out for now
@@ -420,8 +324,7 @@
     }
 }
 
-## Could support "[dln]Matrix" and "array", which would also be handled
-## like vectors ... leaving out for now
+## Could support "[dln]Matrix" and "array" ... leaving out for now
 .pM.sub1.mat <- function(x, i, drop, col) {
     ## if (is.numeric(i) || is(i, "dMatrix")) {
     if (is.numeric(i)) {
