@@ -21,7 +21,7 @@ void fast_symmetric_DimNames(SEXP dn, SEXP *vec, SEXP *nm)
     if (!isNull(*nm))
     {
 	*nm = STRING_ELT(*nm, 0);
-	if (*nm == NA_STRING || LENGTH(*nm) == 0)
+	if (LENGTH(*nm) == 0) /* note that LENGTH(NA_STRING) = 2 */
 	{
 	    *nm = STRING_ELT(*nm, 1);
 	}
