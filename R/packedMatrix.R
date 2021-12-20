@@ -31,51 +31,6 @@
     stop("incorrect number of dimensions")
 }
 
-## convert [i, j] integer index of triangular 'n'-by-'n' matrix 'x' to
-## [k] integer index of x[upper.tri(x, TRUE)] or x[lower.tri(x, TRUE)]
-## ... can be deleted once '.pM.sub0.ij' is implemented in C
-.pM.arity21 <- function(i, j, n, up) {
-    if (up) {
-        i + ((j - 1L) * j) %/% 2L            # needs 1 <= i <= j <= n
-    } else {
-        i + ((j - 1L) * (2L * n - j)) %/% 2L # needs 1 <= j <= i <= n
-    }
-}
-
-## do x[ij] efficiently where 'ij' is a two-column integer matrix
-## containing only integers in '1:dim(x)[1L]' or NA
-## FIXME: implement in C
-.pM.sub0.ij <- function(x, ij) {
-    ## deal with [i, j] outside of ("opposite") stored triangle
-    up <- x@uplo == "U"
-    sy <- is(x, "symmetricMatrix") # otherwise "triangularMatrix"
-    op <-
-        if (up) {
-            ij[, 1L] > ij[, 2L]
-        } else {
-            ij[, 1L] < ij[, 2L]
-        }
-    op <- !is.na(op) & op
-    aop <- any(op)
-    if (aop) {
-        if (sy) {
-            ## transpose
-            ij[op, ] <- ij[op, 2:1, drop = FALSE]
-        } else {
-            ## discard ... we know the indexed element is zero
-            ij <- ij[!op, , drop = FALSE]
-        }
-    }
-    ## now subset
-    k <- .pM.arity21(ij[, 1L], ij[, 2L], n = x@Dim[1L], up = up)
-    xk <- x@x[k]
-    if (aop && !sy) {
-        replace(vector(typeof(xk), length(op)), !op, xk)
-    } else {
-        xk
-    }
-}
-
 ## NOTATION:
 ## utility .pM.sub<code>.<class> subsets "packedMatrix"
 ## code=
@@ -167,7 +122,7 @@
         }
     }
     ## dispatch
-    ## FIXME: inefficient ... is 'R_MAIN_DIR/subscript.c' machinery better?
+    ## FIXME: inefficient... is 'R_MAIN_DIR/subscript.c' machinery better?
     ## though notably still an improvement over 'as(x, "matrix")[i]'
     ## which allocates a double vector of length n*n when 'x' is a "dMatrix"
     .pM.sub0.num(x, seq_len(n * n)[i])
@@ -231,7 +186,7 @@
     if (n <= 1L) {
         return(x@x[i])
     }
-    ## FIXME: inefficient ... is 'R_MAIN_DIR/subscript.c' machinery better?
+    ## FIXME: inefficient... is R_MAIN_DIR/subscript.c machinery better?
     if (any(i < 0, na.rm = TRUE)) {
         i <- seq_len(n * n)[i]
     } else {
@@ -242,32 +197,34 @@
         i[i > n * n] <- NA
     }
     ## Expects "nice" indices ... in-bounds integers and NA only
-    .Call(packedMatrix_sub0, x, i)
+    .Call(packedMatrix_sub0_1ary, x, i)
 }
 .pM.sub1.num <- function(x, i, drop, col) {
-    if (any(i >= x@Dim[1L] + 1L, na.rm = TRUE)) {
+    n <- x@Dim[1L]
+    if (any(i >= n + 1L, na.rm = TRUE)) {
         .pM.error.oob()
     }
     ## Expects "nice" indices ... in-bounds integers and NA only
     .Call(packedMatrix_sub1, x, seq_len(n)[i], drop, col)
 }
 
-## Could support "[dn]Matrix" and "array" ... leaving out for now
+## Could be adapted to support "[dn]Matrix" and "array" ...
+## leaving out for now
 .pM.sub0.mat <- function(x, i) {
-    ## if (is(i, "lMatrix") || is(i, "nMatrix") || is.logical(i)) {
-    if (is(i, "lMatrix") || is.logical(i)) {
+    if (is(i, "lMatrix")) {
         return(.pM.sub0.logi(x, as.vector(i)))
+    }
+    if (is.logical(i)) {
+        dim(i) <- NULL
+        return(.pM.sub0.logi(x, i))
     }
     d <- dim(i)
     if (length(d) == 2L && d[2L] == 2L) {
-        ## if (is(i, "dMatrix")) {
-        ##     i <- as(i, "matrix")
-        ## }
-        if (is.double(i)) {
-            ## coerce to integer while preserving 'dim'
-            storage.mode(i) <- "integer"
-        }
-        if (is.integer(i)) {
+        if (is.numeric(i)) {
+            if (is.double(i)) {
+                i <- as.integer(i)
+                dim(i) <- d
+            }
             ## rows containing 0 are deleted, rows containing NA result in NA,
             ## rows containing both are handled according to the first column
             i <- i[i[, 1L] != 0L, , drop = FALSE] # NA,j -> NA,NA
@@ -281,7 +238,8 @@
             if (any(i > x@Dim[1L], na.rm = TRUE)) {
                 .pM.error.oob()
             }
-            .pM.sub0.ij(x, i)
+            ## Expects "nice" indices ... in-bounds integers and NA only
+            .Call(packedMatrix_sub0_2ary, x, i)
         } else if (is.character(i)) {
             if (d[1L] == 0L) {
                 return(x@x[0L])
@@ -295,32 +253,30 @@
             if (any(rowSums(is.na(i)) == 0L & rowSums(is.na(m)) > 0L)) {
                 .pM.error.oob()
             }
-            .pM.sub0.ij(x, m)
+            ## Expects "nice" indices ... in-bounds integers and NA only
+            .Call(packedMatrix_sub0_2ary, x, m)
         } else {
             .pM.error.ist(i)
         }
     } else {
-        ## if (is(i, "dMatrix") || is.numeric(i)) {
+        dim(i) <- NULL
         if (is.numeric(i)) {
-            .pM.sub0.num(x, as.vector(i))
+            .pM.sub0.num(x, i)
         } else if (is.character(i)) {
-            .pM.sub0.chr(x, as.vector(i))
+            .pM.sub0.chr(x, i)
         } else {
             .pM.error.ist(i)
         }
     }
 }
-
-## Could support "[dln]Matrix" and "array" ... leaving out for now
 .pM.sub1.mat <- function(x, i, drop, col) {
-    ## if (is.numeric(i) || is(i, "dMatrix")) {
+    dim(i) <- NULL
     if (is.numeric(i)) {
-        .pM.sub1.num(x, as.vector(i), drop = drop, col = col)
-    ## } else if (is.logical(i) || is(i, "lMatrix") || is(i, "nMatrix")) {
+        .pM.sub1.num(x, i, drop = drop, col = col)
     } else if (is.logical(i)) {
-        .pM.sub1.logi(x, as.vector(i), drop = drop, col = col)
+        .pM.sub1.logi(x, i, drop = drop, col = col)
     } else if (is.character(i)) {
-        .pM.sub1.chr(x, as.vector(i), drop = drop, col = col)
+        .pM.sub1.chr(x, i, drop = drop, col = col)
     } else {
         .pM.error.ist(i)
     }

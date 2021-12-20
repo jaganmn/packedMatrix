@@ -4,6 +4,34 @@
 #include <string.h>
 #include "packedMatrix.h"
 
+#define PM_AR21_UP(i, j) i + (j * (j + 1)) / 2
+#define PM_AR21_LO(i, j, n2) i + (j * (n2 - j - 1)) / 2
+
+/* An alternative to the existing utility 'symmetric_DimNames' enabling 
+   user to decide whether copying is necessary in certain cases ...
+   perhaps the existing utility can be rebuilt around this one so that
+   they remain in sync ...
+*/
+void fast_symmetric_DimNames(SEXP dn, SEXP *vec, SEXP *nm)
+{
+    SEXP rn = VECTOR_ELT(dn, 0);
+    *vec = (isNull(rn) ? VECTOR_ELT(dn, 1) : rn);
+    
+    *nm = getAttrib(dn, R_NamesSymbol);
+    if (!isNull(*nm))
+    {
+	*nm = STRING_ELT(*nm, 0);
+	if (*nm == NA_STRING || LENGTH(*nm) == 0)
+	{
+	    *nm = STRING_ELT(*nm, 1);
+	}
+    }
+}
+
+/* FIXME: could avoid some duplication by calling 'symmetricMatrix_validate'
+   or 'triangularMatrix_validate' conditional on existence of 'diag' slot ...
+   would still need to check length(.@x) though
+*/
 SEXP packedMatrix_validate(SEXP obj)
 {
     SEXP val = GET_SLOT(obj, Matrix_DimSym);
@@ -32,22 +60,10 @@ SEXP packedMatrix_validate(SEXP obj)
     val = GET_SLOT(obj, Matrix_xSym);
     if (LENGTH(val) != PACKED_LENGTH(n))
     {
-        return mkString(_("'x' slot does not have length 'Dim[1]*(Dim[1]+1)/2'"));
+        return mkString(_("'x' slot does not have length 'n*(n+1)/2', n=Dim[1]"));
     }
     return ScalarLogical(1);
 }
-
-#define PM_AR21_UP(i, j) i + (j * (j + 1)) / 2
-#define PM_AR21_LO(i, j, n2) i + (j * (n2 - j - 1)) / 2
-
-SEXP packedMatrix_t(SEXP obj)
-{
-    /* Initialize result of same class */
-    const char *cl = class_P(obj);
-    SEXP res = PROTECT(NEW_OBJECT_OF_CLASS(cl));
-    int n = INTEGER(GET_SLOT(obj, Matrix_DimSym))[0];
-    /* ? upper -> lower : lower -> upper */
-    Rboolean up = uplo_P(obj)[0] == 'U';
 
 #define PM_T_LOOP(_px0_, _px1_)						\
     /* Loop over [i,j] 0-indices of stored triangle of _result_ */	\
@@ -57,7 +73,7 @@ SEXP packedMatrix_t(SEXP obj)
 	{								\
 	    for (int i = j; i < n; ++i)					\
 	    {								\
-		(_px1_)[k++] = (_px0_)[PM_AR21_UP(j, i)]; \
+		(_px1_)[k++] = (_px0_)[PM_AR21_UP(j, i)];		\
 	    }								\
 	}								\
     }									\
@@ -68,23 +84,33 @@ SEXP packedMatrix_t(SEXP obj)
 	{								\
 	    for (int i = 0; i <= j; ++i)				\
 	    {								\
-		(_px1_)[k++] = (_px0_)[PM_AR21_LO(j, i, n2)]; \
+		(_px1_)[k++] = (_px0_)[PM_AR21_LO(j, i, n2)];		\
 	    }								\
 	}								\
     }
 
 #define PM_T(_datatype_, _sexptype_, _accessor_)			\
-    SEXP x1 = PROTECT(allocVector(_sexptype_, LENGTH(x0)));		\
+    x1 = PROTECT(allocVector(_sexptype_, LENGTH(x0)));			\
     _datatype_ *px0 = _accessor_(x0);					\
     _datatype_ *px1 = _accessor_(x1);					\
     PM_T_LOOP(px0, px1);						\
     SET_SLOT(res, Matrix_xSym, x1);					\
     UNPROTECT(1)
 
+/* t(x) */
+SEXP packedMatrix_t(SEXP obj)
+{
+    /* Initialize result of same class */
+    SEXP res = PROTECT(NEW_OBJECT_OF_CLASS(class_P(obj)));
+    int n = INTEGER(GET_SLOT(obj, Matrix_DimSym))[0];
+    /* ? upper -> lower : lower -> upper */
+    Rboolean up = uplo_P(obj)[0] == 'U';
+
     SEXP x0 = GET_SLOT(obj, Matrix_xSym);
     if (n > 1)
     {
 	/* Permute 'x' slot */
+	SEXP x1;
 	if (isReal(x0))
 	{
 	    PM_T(double, REALSXP, REAL);
@@ -99,9 +125,6 @@ SEXP packedMatrix_t(SEXP obj)
 	/* Preserve 'x' slot */
 	SET_SLOT(res, Matrix_xSym, x0);
     }
-
-#undef PM_T
-#undef PM_T_LOOP
 
     /* Toggle 'uplo' slot */
     SET_SLOT(res, Matrix_uploSym, mkString(up ? "L" : "U"));
@@ -124,37 +147,10 @@ SEXP packedMatrix_t(SEXP obj)
     SET_SLOT(res, Matrix_DimNamesSym, dn1);
     UNPROTECT(2);
     return res;
-} /* packedMatrix_t */
+}
 
-/* 'packedMatrix_diag_get' handles 'names' precisely as documented
-   in '?diag', whereas current '*_getDiag' machinery neglects 'names'.
-
-   It combines the work of 6 existing C utilities:
-   '[dl][st]pMatrix_detDiag' and '[dl]_packed_getDiag'.
-
-   It does so at the cost of conditioning on class
-   (double/logical, triangular/symmetric).
-   However, this conditioning happens outside of any loop,
-   so there is minimal cost to performance
-   (1 call to isReal, 1 call to R_has_slot) ...
-*/
-SEXP packedMatrix_diag_get(SEXP obj, SEXP nms)
-{
-    int do_nms = asLogical(nms);
-    if (do_nms == NA_LOGICAL)
-    {
-	error(_("'names' must be TRUE or FALSE"));
-    }
-
-    SEXP res;
-    SEXP x = GET_SLOT(obj, Matrix_xSym);
-    int n = INTEGER(GET_SLOT(obj, Matrix_DimSym))[0];
-    /* ? triangular : symmetric */
-    Rboolean tr = R_has_slot(obj, Matrix_diagSym);
-    /* ? unit triangular : other */
-    Rboolean utr = tr && diag_P(obj)[0] == 'U';
-    /* ? upper : lower */
-    Rboolean up = uplo_P(obj)[0] == 'U';
+#undef PM_T
+#undef PM_T_LOOP
 
 #define PM_D_G_UDIAG(_pres_, _one_)		\
     for (int j = 0; j < n; ++j)			\
@@ -163,19 +159,9 @@ SEXP packedMatrix_diag_get(SEXP obj, SEXP nms)
     }
 
 #define PM_D_G_NDIAG(_pres_, _px_)					\
-    if (up)								\
+    for (int j = 0, pos = 0; j < n; pos += (up ? 1 + (++j) : n - (j++))) \
     {									\
-        for (int j = 0, pos = 0; j < n; pos += 1 + (++j))		\
-	{								\
-	    (_pres_)[j] = (_px_)[pos];					\
-	}								\
-    }									\
-    else								\
-    {									\
-	for (int j = 0, pos = 0; j < n; pos += n - (j++))		\
-        {								\
-	    (_pres_)[j] = (_px_)[pos];					\
-        }								\
+	(_pres_)[j] = (_px_)[pos];					\
     }
 
 #define PM_D_G(_datatype_, _sexptype_, _accessor_, _one_)	\
@@ -191,17 +177,42 @@ SEXP packedMatrix_diag_get(SEXP obj, SEXP nms)
 	PM_D_G_NDIAG(pres, px);					\
     }
 
-    if (isReal(x)) { /* d[st]pMatrix */
+/* 'packedMatrix_diag_get' handles 'names' precisely as documented
+   in '?diag', whereas current '*_getDiag' machinery neglects 'names'.
+
+   It combines the work of 6 existing C utilities:
+   '[dl][st]pMatrix_detDiag' and '[dl]_packed_getDiag'.
+
+   It does so at the cost of conditioning on class
+   (double/logical, triangular/symmetric), 
+   but that cost is minimal
+   (1 call to isReal, 1 call to R_has_slot) ...
+*/
+SEXP packedMatrix_diag_get(SEXP obj, SEXP nms)
+{
+    int do_nms = asLogical(nms);
+    if (do_nms == NA_LOGICAL)
+    {
+	error(_("'names' must be TRUE or FALSE"));
+    }
+
+    int n = INTEGER(GET_SLOT(obj, Matrix_DimSym))[0];
+    /* ? triangular : symmetric */
+    Rboolean tr = R_has_slot(obj, Matrix_diagSym);
+    /* ? unit triangular : other */
+    Rboolean utr = tr && diag_P(obj)[0] == 'U';
+    /* ? upper : lower */
+    Rboolean up = uplo_P(obj)[0] == 'U';
+
+    SEXP res;
+    SEXP x = GET_SLOT(obj, Matrix_xSym);
+    if (isReal(x)) {
 	PM_D_G(double, REALSXP, REAL, 1.0);
     }
-    else /* [ln][st]pMatrix */
+    else
     {
 	PM_D_G(int, LGLSXP, LOGICAL, 1);
     }
-
-#undef PM_D_G
-#undef PM_D_G_NDIAG
-#undef PM_D_G_UDIAG
 
     if (do_nms)
     {
@@ -225,19 +236,47 @@ SEXP packedMatrix_diag_get(SEXP obj, SEXP nms)
     }
     UNPROTECT(1);
     return res;
-} /* packedMatrix_diag_get */
+}
 
+#undef PM_D_G
+#undef PM_D_G_NDIAG
+#undef PM_D_G_UDIAG
+
+#define PM_D_S_ONE(_px_, _d_)						\
+    for (int j = 0, pos = 0; j < n; pos += (up ? 1 + (++j) : n - (j++))) \
+    {									\
+	(_px_)[pos] = _d_;						\
+    }
+
+#define PM_D_S_FULL(_px_, _pval_)					\
+    for (int j = 0, pos = 0; j < n; pos += (up ? 1 + (++j) : n - (j++))) \
+    {									\
+	(_px_)[pos] = (_pval_)[j];					\
+    }
+
+#define PM_D_S(_datatype_, _accessor_)		\
+    _datatype_ *px = _accessor_(x);		\
+    _datatype_ *pval = _accessor_(val);		\
+    if (nv1)					\
+    {						\
+	_datatype_ d = pval[0];			\
+	PM_D_S_ONE(px, d);			\
+    }						\
+    else					\
+    {						\
+	PM_D_S_FULL(px, pval);			\
+    }
 
 /* 'packedMatrix_diag_set' handles coercions similarly to base R's
    'diag<-' and performs explicit tests for type compatibility,
    whereas current '*_setDiag' machinery does neither. It also does
-   more to avoid memory allocation ...
+   more to avoid memory allocation ... ??
 
    It combines the work of 8 existing C utilities:
-   '[dl][st]pMatrix_setDiag' and '(tr_)?[dl]_packed_setDiag'
+   '[dl][st]pMatrix_setDiag' and '(tr_)?[dl]_packed_setDiag'.
 
-   Like 'packedMatrix_diag_get', it conditions on class _outside_
-   of any loop ...
+   Like 'packedMatrix_diag_get', it conditions on class but the cost
+   of doing so is minimal ...
 */
 SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
 {
@@ -249,13 +288,12 @@ SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
 	error(_("replacement diagonal has wrong length"));
     }
 
+    /* Initialize result object of same class */
     SEXP res;
     int nprotect = 0;
     if (MAYBE_REFERENCED(obj)) /* MAYBE_SHARED seems less safe ... */
     {
-	/* Avoids allocation where possible */
-	const char *cl = class_P(obj);
-	res = PROTECT(NEW_OBJECT_OF_CLASS(cl)); ++nprotect;
+	res = PROTECT(NEW_OBJECT_OF_CLASS(class_P(obj))); ++nprotect;
 	SET_SLOT(res, Matrix_DimSym, GET_SLOT(obj, Matrix_DimSym));
 	SET_SLOT(res, Matrix_DimNamesSym, GET_SLOT(obj, Matrix_DimNamesSym));
 	SET_SLOT(res, Matrix_uploSym, GET_SLOT(obj, Matrix_uploSym));
@@ -263,16 +301,15 @@ SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
     }
     else
     {
-	/* Avoids allocation _entirely_ */
 	res = obj;
     }
+
+    /* Toggle 'diag' slot when assigning to unit diagonal "[dln]tpMatrix" */
     if (Diag_P(res)[0] == 'U')
     {
-	/* Assigning to unit diagonal "[dln]tpMatrix" toggles 'diag' slot */
 	SET_SLOT(res, Matrix_diagSym, mkString("N"));
     }
 
-    SEXP x = GET_SLOT(res, Matrix_xSym);
     /* ? double result : logical result */
     Rboolean dbl = TRUE;
     /* ? upper : lower */
@@ -281,6 +318,7 @@ SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
     /* Test that LHS and RHS of assignment have compatible types,
        coercing one or the other from logical to double if necessary
      */
+    SEXP x = GET_SLOT(res, Matrix_xSym);
     switch (TYPEOF(x))
     {
     case LGLSXP:
@@ -299,8 +337,8 @@ SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
 	    cl[0] = 'd';
 	    SET_STRING_ELT(strcl, 0, mkChar(cl));
 	    free(cl);
-	    SET_SLOT(res, Matrix_xSym, coerceVector(x, REALSXP));
-	    x = GET_SLOT(res, Matrix_xSym);
+	    x = PROTECT(coerceVector(x, REALSXP)); ++nprotect;
+	    SET_SLOT(res, Matrix_xSym, x);
 	    break;
 	}
 	default:
@@ -327,52 +365,7 @@ SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
 	      type2char(LGLSXP), type2char(REALSXP));
     }
 
-#define PM_D_S_ONE(_px_, _d_)						\
-    if (up)								\
-    {									\
-        for (int j = 0, pos = 0; j < n; pos += 1 + (++j))		\
-	{								\
-	    (_px_)[pos] = _d_;						\
-	}								\
-    }									\
-    else								\
-    {									\
-	for (int j = 0, pos = 0; j < n; pos += n - (j++))		\
-        {								\
-	    (_px_)[pos] = _d_;						\
-        }								\
-    }
-
-#define PM_D_S_FULL(_px_, _pval_)					\
-    if (up)								\
-    {									\
-        for (int j = 0, pos = 0; j < n; pos += 1 + (++j))		\
-	{								\
-	    (_px_)[pos] = (_pval_)[j];					\
-	}								\
-    }									\
-    else								\
-    {									\
-	for (int j = 0, pos = 0; j < n; pos += n - (j++))		\
-	{								\
-	    (_px_)[pos] = (_pval_)[j];					\
-	}								\
-    }
-
-#define PM_D_S(_datatype_, _accessor_)		\
-    _datatype_ *px = _accessor_(x);		\
-    _datatype_ *pval = _accessor_(val);		\
-    if (nv1)					\
-    {						\
-	_datatype_ d = pval[0];			\
-	PM_D_S_ONE(px, d);			\
-    }						\
-    else					\
-    {						\
-	PM_D_S_FULL(px, pval);			\
-    }
-
-    if (dbl) /* d[st]pMatrix */
+    if (dbl)
     {
 	PM_D_S(double, REAL);
     }
@@ -380,235 +373,124 @@ SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
     {
 	PM_D_S(int, LOGICAL);
     }
+    UNPROTECT(nprotect);
+    return res;
+}
 
 #undef PM_D_S
 #undef PM_D_S_FULL
 #undef PM_D_S_ONE
 
-    UNPROTECT(nprotect);
-    return res;
-} /* packedMatrix_diag_set */
+#define PM_SUB0_START					\
+    SEXP x = GET_SLOT(obj, Matrix_xSym);		\
+    int n = INTEGER(GET_SLOT(obj, Matrix_DimSym))[0];	\
+    int n2 = 2 * n;					\
+    int *pindex = INTEGER(index);			\
+    /* ? triangular : symmetric */			\
+    Rboolean tr = R_has_slot(obj, Matrix_diagSym);	\
+    /* ? unit triangular : other */			\
+    Rboolean utr = tr && diag_P(obj)[0] == 'U';		\
+    /* ? upper : lower */				\
+    Rboolean up = uplo_P(obj)[0] == 'U'
 
+#define PM_SUB0_IJ(i, j, _px_, _zero_, _one_)			\
+    (utr && i == j						\
+     ? _one_							\
+     : (up							\
+	? (i <= j						\
+	   ? (_px_)[PM_AR21_UP(i, j)]				\
+	   : (tr						\
+	      ? _zero_						\
+	      : (_px_)[PM_AR21_UP(j, i)]))			\
+	: (i >= j						\
+	   ? (_px_)[PM_AR21_LO(i, j, n2)]			\
+	   : (tr						\
+	      ? _zero_						\
+	      : (_px_)[PM_AR21_LO(j, i, n2)]))))
 
-/* Low level implementation of 'x[i]' in the "nice" situation 
-   in which 'i' supplies only in-bounds integers and NA ...
+#define PM_SUB0_LOOP(_pres_, _px_, _na_, _zero_, _one_)			\
+    for (int k = 0, i, j, pos; k < nindex; ++k)				\
+    {									\
+	pos = pindex[k];						\
+	if (pos == NA_INTEGER)						\
+	{								\
+	    (_pres_)[k] = _na_;						\
+	}								\
+	else								\
+	{								\
+	    pos -= 1; /* 1-index -> 0-index */				\
+	    i = pos % n;						\
+	    j = pos / n;						\
+	    (_pres_)[k] = PM_SUB0_IJ(i, j, _px_, _zero_, _one_);	\
+	}								\
+    }
+
+#define PM_SUB0(_datatype_, _sexptype_, _accessor_, _na_, _zero_, _one_) \
+    SEXP res = PROTECT(allocVector(_sexptype_, nindex));		\
+    _datatype_ *pres = _accessor_(res);					\
+    _datatype_ *px = _accessor_(x);					\
+    PM_SUB0_LOOP(pres, px, _na_, _zero_, _one_);			\
+    UNPROTECT(1);							\
+    return res
+
+#define PM_SUB0_END						\
+    if (isReal(x))						\
+    {								\
+	PM_SUB0(double, REALSXP, REAL, NA_REAL, 0.0, 1.0);	\
+    }								\
+    else							\
+    {								\
+	PM_SUB0(int, LGLSXP, LOGICAL, NA_LOGICAL, 0, 1);	\
+    }
+
+/* 'x[index]' where 'index' is an integer vector supplying 
+   integers in 'c(1:(n*n), NA)' _only_
 */
-SEXP packedMatrix_sub0(SEXP obj, SEXP index)
+SEXP packedMatrix_sub0_1ary(SEXP obj, SEXP index)
 {
-    int n = INTEGER(GET_SLOT(obj, Matrix_DimSym))[0];
-    SEXP x = GET_SLOT(obj, Matrix_xSym);
-
+    PM_SUB0_START;
     int nindex = LENGTH(index);
-    SEXP res = PROTECT(allocVector(TYPEOF(x), nindex));
+    PM_SUB0_END;
+}
 
-    /* ? triangular : symmetric */
-    Rboolean tr = R_has_slot(obj, Matrix_diagSym);
-    /* ? unit triangular : other */
-    Rboolean utr = tr && diag_P(obj)[0] == 'U';
-    /* ? upper : lower */
-    Rboolean up = uplo_P(obj)[0] == 'U';
+#undef PM_SUB0_LOOP
 
-#define PM_SUB0_LOOP(_na_, _zero_, _one_)				\
-    if (up)								\
+#define PM_SUB0_LOOP(_pres_, _px_, _na_, _zero_, _one_)			\
+    for (int k = 0, i, j; k < nindex; ++k)				\
     {									\
-	for (int pos = 0, i, j, k; pos < nindex; ++pos)			\
+	i = pindex[k];							\
+	j = pindex[k + nindex];						\
+	if (i == NA_INTEGER || j == NA_INTEGER)				\
 	{								\
-	    k = pindex[pos];						\
-	    if (k == NA_INTEGER)					\
-	    {								\
-		pres[pos] = _na_;					\
-									\
-	    }								\
-            else							\
-	    {								\
-		k -= 1;	/* 1-index to 0-index */			\
-		i = k % n;						\
-		j = k / n;						\
-		if (i > j)						\
-		{							\
-		    if (tr)						\
-		    {							\
-			pres[pos] = _zero_;				\
-		    }							\
-		    else						\
-		    {							\
-			pres[pos] = px[PM_AR21_UP(j, i)];		\
-		    }							\
-		}							\
-		else if (utr && i == j)					\
-		{							\
-		    pres[pos] = _one_;					\
-		}							\
-		else							\
-		{							\
-		    pres[pos] = px[PM_AR21_UP(i, j)];			\
-		}							\
-	    }								\
+	    (_pres_)[k] = _na_;						\
 	}								\
-    }									\
-    else								\
-    {									\
-	int n2 = 2 * n;							\
-	for (int k = 0, i, j, pos; k < nindex; ++k)			\
+	else								\
 	{								\
-	    pos = pindex[k];						\
-	    if (pos == NA_INTEGER)					\
-	    {								\
-		pres[k] = _na_;						\
-	    }								\
-	    else							\
-	    {								\
-		pos -= 1;						\
-		i = pos % n;						\
-		j = pos / n;						\
-		if (tr && i < j)					\
-		{							\
-		    if (tr)						\
-		    {							\
-			pres[k] = _zero_;				\
-		    }							\
-		    else						\
-		    {							\
-			pres[k] = px[PM_AR21_LO(j, i, n2)];		\
-		    }							\
-		}							\
-		else if (utr && i == j)					\
-		{							\
-		    pres[k] = _one_;					\
-		}							\
-		else							\
-		{							\
-		    pres[k] = px[PM_AR21_LO(i, j, n2)];			\
-		}							\
-	    }								\
+	    i -= 1;							\
+	    j -= 1;							\
+	    (_pres_)[k] = PM_SUB0_IJ(i, j, _px_, _zero_, _one_);	\
 	}								\
     }
 
-    int *pindex = INTEGER(index);
-    if (isReal(x))
-    {
-	double *px = REAL(x);
-	double *pres = REAL(res);
-	PM_SUB0_LOOP(NA_REAL, 0.0, 1.0);
-    }
-    else
-    {
-	int *px = LOGICAL(x);
-	int *pres = LOGICAL(res);
-	PM_SUB0_LOOP(NA_LOGICAL, 0, 1);
-    }
+/* 'x[index]' where 'index' is a 2-column integer matrix supplying 
+   integers in 'c(1:n, NA)' _only_
+*/
+SEXP packedMatrix_sub0_2ary(SEXP obj, SEXP index)
+{
+    PM_SUB0_START;
+    int nindex = INTEGER(getAttrib(index, R_DimSymbol))[0];
+    PM_SUB0_END;
+}
 
+#undef PM_SUB0_END
 #undef PM_SUB0
+#undef PM_SUB0_LOOP
+#undef PM_SUB0_START
 
-    UNPROTECT(1);
-    return res;
-} /* packedMatrix_sub0 */
-
-/* Low level implementation of 'x[i, ]' and 'x[, i]' in the "nice" situation 
-   in which 'i' supplies only in-bounds integers and NA ...
-*/
-SEXP packedMatrix_sub1(SEXP obj, SEXP index, SEXP drop, SEXP col)
-{
-    int do_drop = asLogical(drop);
-    if (do_drop == NA_LOGICAL)
-    {
-	error(_("'drop' must be TRUE or FALSE"));
-    }
-
-    int n = INTEGER(GET_SLOT(obj, Matrix_DimSym))[0];
-    int n2 = 2 * n;
-    int nindex = LENGTH(index);
-    int nprotect = 0;
-
-    /* ? triangular : symmetric */
-    Rboolean tr = R_has_slot(obj, Matrix_diagSym);
-    /* ? unit triangular : other */
-    Rboolean utr = tr && diag_P(obj)[0] == 'U';
-    /* ? upper : lower */
-    Rboolean up = uplo_P(obj)[0] == 'U';
-    /* ? index columns : index rows */
-    Rboolean do_col = LOGICAL(col)[0];
-    /* redundant but slightly easier to conceptualize */
-    int mar = !do_col;
-
-    /* Initialize result of same type but "general" class */
-    char *cl = strdup(class_P(obj));
-    cl[1] = 'g';
-    cl[2] = 'e';
-    SEXP res = PROTECT(NEW_OBJECT_OF_CLASS(cl)); ++nprotect;
-    free(cl);
-
-    /* Set 'x' slot */
-    SEXP x0 = GET_SLOT(obj, Matrix_xSym);
-    SEXP x1 = PROTECT(allocVector(TYPEOF(x0), n * nindex)); ++nprotect;
-    SET_SLOT(res, Matrix_xSym, x1);
-
-    /* Set 'Dim' slot */
-    SEXP d1 = PROTECT(GET_SLOT(res, Matrix_DimSym));
-    INTEGER(d1)[mar] = n;
-    INTEGER(d1)[!mar] = nindex;
-    UNPROTECT(1);
-
-    /* Set 'Dimnames' slot and (if not absent) 'names(Dimnames)' ...
-       _could_ use 'symmetric_DimNames' but it copies unnecessarily ...
-     */
-    SEXP dn0 = GET_SLOT(obj, Matrix_DimNamesSym);
-    SEXP dn1 = GET_SLOT(res, Matrix_DimNamesSym);
-
-    SEXP ndn0 = getAttrib(dn0, R_NamesSymbol);
-    if (!isNull(ndn0))
-    {
-	SEXP ndn1 = PROTECT(duplicate(ndn0));
-	if (!tr)
-	{
-	    /* Enforce symmetry of 'names(Dimnames)' */
-	    if (strcmp(CHAR(STRING_ELT(ndn1, 0)), CHAR(STRING_ELT(ndn1, 1))))
-	    {
-		int nonemp = LENGTH(STRING_ELT(ndn1, 0)) == 0;
-		SET_STRING_ELT(ndn1, !nonemp, STRING_ELT(ndn1, nonemp));
-	    }
-	}
-	setAttrib(dn1, R_NamesSymbol, ndn1);
-	UNPROTECT(1);
-    }
-
-    SEXP srcnms, destnms;
-    srcnms = VECTOR_ELT(dn0, !mar);
-    Rboolean do_nms = !isNull(srcnms);
-    if (tr)
-    {
-	SET_VECTOR_ELT(dn1, mar, VECTOR_ELT(dn0, mar));
-    }
-    else
-    {
-	/* Enforce symmetry of 'Dimnames' */
-	if (!do_nms)
-	{
-	    srcnms = VECTOR_ELT(dn0, mar);
-	    do_nms = !isNull(srcnms);
-	}
-	SET_VECTOR_ELT(dn1, mar, srcnms);
-    }
-    if (nindex == 0)
-    {
-	do_nms = FALSE;
-    }
-    if (do_nms)
-    {
-	destnms = PROTECT(allocVector(STRSXP, nindex)); nprotect++;
-	SET_VECTOR_ELT(dn1, !mar, destnms);
-    }
-    else
-    {
-	SET_VECTOR_ELT(dn1, !mar, R_NilValue);
-    }
-
-    /* FIXME: condense or separate different cases to reduce repetition
-       and avoid conditioning inside of loops
-     */
-#define PM_SUB1_LOOP(_na_, _zero_, _one_)				\
-    int incr = (do_col ? 1 : nindex);					\
-    for (int i, k = 0, pos = 0; k < nindex; ++k)			\
+#define PM_SUB1_LOOP(_px0_, _px1_, _na_, _zero_, _one_)			\
+    int i, incr;							\
+    incr = (do_col ? 1 : nindex);					\
+    for (int k = 0, pos = 0; k < nindex; ++k)				\
     {									\
 	i = pindex[k];							\
 	if (i == NA_INTEGER)						\
@@ -629,13 +511,15 @@ SEXP packedMatrix_sub1(SEXP obj, SEXP index, SEXP drop, SEXP col)
 	    {								\
 		SET_STRING_ELT(destnms, k, STRING_ELT(srcnms, i));	\
 	    }								\
+	    /* FIXME: is there a nice way to reduce repetition */	\
+	    /* here without obfuscating too much ... ?? */		\
 	    if (tr)							\
 	    {								\
 		if (up)							\
 		{							\
 		    if (do_col)						\
 		    {							\
-			for (int j = 0; j < i; ++j, pos += incr)	\
+			for (int j = 0; j <= i; ++j, pos += incr)	\
 			{						\
 			    px1[pos] = px0[PM_AR21_UP(i, j)];		\
 			}						\
@@ -671,7 +555,7 @@ SEXP packedMatrix_sub1(SEXP obj, SEXP index, SEXP drop, SEXP col)
 		    }							\
 		    else						\
 		    {							\
-			for (int j = 0; j < i + 1; ++j, pos += incr)	\
+			for (int j = 0; j <= i; ++j, pos += incr)	\
 			{						\
 			    px1[pos] = px0[PM_AR21_LO(i, j, n2)];	\
 			}						\
@@ -701,7 +585,7 @@ SEXP packedMatrix_sub1(SEXP obj, SEXP index, SEXP drop, SEXP col)
 		}							\
 		else							\
 		{							\
-		    for (int j = 0; j < i + 1; ++j, pos += incr)	\
+		    for (int j = 0; j <= i; ++j, pos += incr)		\
 		    {							\
 			px1[pos] = px0[PM_AR21_LO(i, j, n2)];		\
 		    }							\
@@ -718,35 +602,116 @@ SEXP packedMatrix_sub1(SEXP obj, SEXP index, SEXP drop, SEXP col)
 	}								\
     }
 
-    int *pindex = INTEGER(index);
-    if (isReal(x0))
+#define PM_SUB1(_datatype_, _sexptype_, _accessor_, _na_, _zero_, _one_) \
+    SEXP x1 = PROTECT(allocVector(_sexptype_, n * nindex));		\
+    _datatype_ *px0 = _accessor_(x0);					\
+    _datatype_ *px1 = _accessor_(x1);					\
+    PM_SUB1_LOOP(px0, px1, _na_, _zero_, _one_);			\
+    SET_SLOT(res, Matrix_xSym, x1);					\
+    UNPROTECT(1)
+
+/* 'x[index, ]' and 'x[, index]' where 'i' is an integer vector supplying
+   integers in 'c(1:n, NA)' _only_
+*/
+SEXP packedMatrix_sub1(SEXP obj, SEXP index, SEXP drop, SEXP col)
+{
+    int do_drop = asLogical(drop);
+    if (do_drop == NA_LOGICAL)
     {
-	double *px0 = REAL(x0);
-	double *px1 = REAL(x1);
-	PM_SUB1_LOOP(NA_REAL, 0.0, 1.0);
+	error(_("'drop' must be TRUE or FALSE"));
+    }
+
+    int n = INTEGER(GET_SLOT(obj, Matrix_DimSym))[0];
+    int n2 = 2 * n;
+    int nindex = LENGTH(index);
+    int *pindex = INTEGER(index);
+    int nprotect = 0;
+    /* ? triangular : symmetric */
+    Rboolean tr = R_has_slot(obj, Matrix_diagSym);
+    /* ? unit triangular : other */
+    Rboolean utr = tr && diag_P(obj)[0] == 'U';
+    /* ? upper : lower */
+    Rboolean up = uplo_P(obj)[0] == 'U';
+    /* ? index columns : index rows */
+    Rboolean do_col = LOGICAL(col)[0];
+    /* margin of the subset */
+    int mar = !do_col;
+
+    /* Initialize result of same type but "general" class */
+    char *cl = strdup(class_P(obj));
+    cl[1] = 'g';
+    cl[2] = 'e';
+    SEXP res = PROTECT(NEW_OBJECT_OF_CLASS(cl)); ++nprotect;
+    free(cl);
+    
+    /* Set 'Dim' slot */
+    SEXP d1 = PROTECT(GET_SLOT(res, Matrix_DimSym));
+    INTEGER(d1)[mar] = n;
+    INTEGER(d1)[!mar] = nindex;
+    UNPROTECT(1);
+
+    /* Set 'Dimnames' slot and (if not absent) 'names(Dimnames)' ... */
+    SEXP dn0 = GET_SLOT(obj, Matrix_DimNamesSym);
+    SEXP dn1 = PROTECT(GET_SLOT(res, Matrix_DimNamesSym));
+    SEXP srcnms, destnms; /* for the "stretched" vector of names */
+    if (tr)
+    {
+	SET_VECTOR_ELT(dn1, mar, VECTOR_ELT(dn0, mar));
+	srcnms = VECTOR_ELT(dn0, !mar);
+	SEXP ndn0 = getAttrib(dn0, R_NamesSymbol);
+	if (!isNull(ndn0))
+	{
+	    setAttrib(dn1, R_NamesSymbol, ndn0);
+	}
     }
     else
     {
-	int *px0 = LOGICAL(x0);
-	int *px1 = LOGICAL(x1);
-	PM_SUB1_LOOP(NA_LOGICAL, 0, 1);
+	SEXP s;
+	fast_symmetric_DimNames(dn0, &srcnms, &s);
+	SET_VECTOR_ELT(dn1, mar, srcnms);
+	if (!isNull(s))
+	{
+	    SEXP ndn1 = PROTECT(allocVector(STRSXP, 2));
+	    SET_STRING_ELT(ndn1, 0, s);
+	    SET_STRING_ELT(ndn1, 1, s);
+	    setAttrib(dn1, R_NamesSymbol, ndn1);
+	    UNPROTECT(1);
+	}
+    }
+    Rboolean do_nms = !isNull(srcnms) && nindex > 0;
+    if (do_nms)
+    {
+	destnms = PROTECT(allocVector(STRSXP, nindex)); ++nprotect;
+	SET_VECTOR_ELT(dn1, !mar, destnms);
+    }
+    UNPROTECT(1);
+    
+    SEXP x0 = GET_SLOT(obj, Matrix_xSym);
+    if (isReal(x0))
+    {
+	PM_SUB1(double, REALSXP, REAL, NA_REAL, 0.0, 1.0);
+    }
+    else
+    {
+	PM_SUB1(int, LGLSXP, LOGICAL, NA_LOGICAL, 0, 1);
     }
 
-#undef PM_SUB1_LOOP
-
     /* Drop dimensions in this special case */
-    if (nindex == 1 && do_drop)
+    if (do_drop && nindex == 1)
     {
-	SEXP nms = VECTOR_ELT(dn1, mar);
-	if (!isNull(nms))
+	res = GET_SLOT(res, Matrix_xSym);
+	if (do_nms)
 	{
-	    setAttrib(x1, R_NamesSymbol, nms);
+	    SEXP nms = VECTOR_ELT(dn1, mar);
+	    if (!isNull(nms))
+	    {
+		setAttrib(res, R_NamesSymbol, nms);
+	    }
 	}
-	res = x1;
     }
     UNPROTECT(nprotect);
     return res;
-} /* packedMatrix_sub1 */
+}
 
-#undef PM_AR21_UP
-#undef PM_AR21_LO
+#undef PM_SUB1
+#undef PM_SUB1_LOOP

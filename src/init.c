@@ -262,7 +262,8 @@ static R_CallMethodDef CallEntries[] = {
     CALLDEF(packedMatrix_t, 1),
     CALLDEF(packedMatrix_diag_get, 2),
     CALLDEF(packedMatrix_diag_set, 2),
-    CALLDEF(packedMatrix_sub0, 2),
+    CALLDEF(packedMatrix_sub0_1ary, 2),
+    CALLDEF(packedMatrix_sub0_2ary, 2),
     CALLDEF(packedMatrix_sub1, 4),
 
 /* still simple placeholders, but already used in ../R/AllClass.R : */
