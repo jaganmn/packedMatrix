@@ -7,16 +7,18 @@
 #define PM_AR21_UP(i, j) i + (j * (j + 1)) / 2
 #define PM_AR21_LO(i, j, n2) i + (j * (n2 - j - 1)) / 2
 
-/* An alternative to the existing utility 'symmetric_DimNames' enabling 
-   user to decide whether copying is necessary in certain cases ...
-   perhaps the existing utility can be rebuilt around this one so that
-   they remain in sync ...
+/* An alternative to the existing utility 'symmetric_DimNames' 
+   enabling users to avoid a copy in cases where it is avoidable ...
+   perhaps the existing utility can be rebuilt around this one 
+   so that they remain in sync ...
 */
 void fast_symmetric_DimNames(SEXP dn, SEXP *vec, SEXP *nm)
 {
-    SEXP rn = VECTOR_ELT(dn, 0);
-    *vec = (isNull(rn) ? VECTOR_ELT(dn, 1) : rn);
-    
+    *vec = VECTOR_ELT(dn, 0);
+    if (isNull(*vec))
+    {
+	*vec = VECTOR_ELT(dn, 1);
+    }
     *nm = getAttrib(dn, R_NamesSymbol);
     if (!isNull(*nm))
     {
@@ -270,12 +272,13 @@ SEXP packedMatrix_diag_get(SEXP obj, SEXP nms)
 /* 'packedMatrix_diag_set' handles coercions similarly to base R's
    'diag<-' and performs explicit tests for type compatibility,
    whereas current '*_setDiag' machinery does neither. It also does
-   more to avoid memory allocation ... ??
+   more to avoid memory allocation by copying slot values only if 
+   necessary.
 
    It combines the work of 8 existing C utilities:
    '[dl][st]pMatrix_setDiag' and '(tr_)?[dl]_packed_setDiag'.
 
-   Like 'packedMatrix_diag_get', it conditions on class but the cost
+   Like 'packedMatrix_diag_get', it conditions on class, but the cost
    of doing so is minimal ...
 */
 SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
@@ -304,7 +307,9 @@ SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
 	res = obj;
     }
 
-    /* Toggle 'diag' slot when assigning to unit diagonal "[dln]tpMatrix" */
+    /* Toggle 'diag' slot when assigning to unit diagonal "[dln]tpMatrix",
+       _even if_ RHS of assignment is unity
+     */
     if (Diag_P(res)[0] == 'U')
     {
 	SET_SLOT(res, Matrix_diagSym, mkString("N"));
@@ -369,7 +374,7 @@ SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
     {
 	PM_D_S(double, REAL);
     }
-    else /* [ln][st]pMatrix */
+    else
     {
 	PM_D_S(int, LOGICAL);
     }
@@ -603,7 +608,7 @@ SEXP packedMatrix_sub0_2ary(SEXP obj, SEXP index)
     }
 
 #define PM_SUB1(_datatype_, _sexptype_, _accessor_, _na_, _zero_, _one_) \
-    SEXP x1 = PROTECT(allocVector(_sexptype_, n * nindex));		\
+    x1 = PROTECT(allocVector(_sexptype_, n * nindex));			\
     _datatype_ *px0 = _accessor_(x0);					\
     _datatype_ *px1 = _accessor_(x1);					\
     PM_SUB1_LOOP(px0, px1, _na_, _zero_, _one_);			\
@@ -686,7 +691,8 @@ SEXP packedMatrix_sub1(SEXP obj, SEXP index, SEXP drop, SEXP col)
     }
     UNPROTECT(1);
     
-    SEXP x0 = GET_SLOT(obj, Matrix_xSym);
+    SEXP x0, x1;
+    x0 = GET_SLOT(obj, Matrix_xSym);
     if (isReal(x0))
     {
 	PM_SUB1(double, REALSXP, REAL, NA_REAL, 0.0, 1.0);

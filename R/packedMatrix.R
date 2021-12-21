@@ -2,11 +2,14 @@
 ## * we would potentially benefit from reusing some of the machinery
 ##   in R_MAIN_DIR/subscript.c to convert supplied subscripts to
 ##   "nice" in-bounds integer subscripts, which are necessary to compute
-##   "triangular" subscripts
+##   "triangular" subscripts ... though none of those utilities appear
+##   to be "public" ...
 ##
-## * methods for x[i, j] and x[i, j, drop=] with neither i nor j missing ??
-## * haven't given much thought to long vector support ...
-## * ditto subassignment ...
+## * methods for x[i, j] and x[i, j, drop=] with neither i nor j missing
+## * haven't given much thought to long vector support
+## * ditto subassignment
+## * ditto future '[iz]Matrix' classes
+##
 ## * an efficient 'apply' analogue for "packedMatrix" should be relatively
 ##   easy to implement now that row/column extraction are fast
 ##
@@ -38,19 +41,20 @@
 ## 1: 2-ary indexing with one of 'i', 'j' missing, as in x[i, , drop=]
 ## 2: 2-ary indexing with neither 'i' nor 'j' missing, as in x[i, j, drop=]
 ## class=
-##        index: vector index [includes factor, dispatches to chr,logi,num]
+##        index: vector index [dispatches to chr,logi,num]
 ## chr,logi,num: vector index
 ##          mat: matrix, Matrix, or array index
 ##         null: NULL index
 
-## Mainly to avoid defining methods for each "index" subclass
-## separately, at the (reasonable?) cost of having to dispatch
-## on index type ourselves ...
+## to avoid defining methods for each "index" subclass separately,
+## at the (reasonable?) cost of having to dispatch on index type
+## ourselves ...
 .pM.sub0.index <- function(x, i) {
     switch(mode(i),
            numeric =
                {
                    if (!is.numeric(i)) {
+                       ## use numeric representation of factors, etc.
                        class(i) <- NULL
                    }
                    .pM.sub0.num(x, i)
@@ -64,6 +68,7 @@
            numeric =
                {
                    if (!is.numeric(i)) {
+                       ## use numeric representation of factors, etc.
                        class(i) <- NULL
                    }
                    .pM.sub1.num(x, i, drop = drop, col = col)
@@ -73,8 +78,8 @@
            .pM.error.ist(i))
 }
 
-## Emulating 'stringSubscript' in R_MAIN_DIR/subscript.c,
-## though the first case, 'x[<character but not array>]',
+## emulating 'stringSubscript' in R_MAIN_DIR/subscript.c,
+## though the first case, 'x[<character but not rank-2 matrix>]',
 ## is quite pathological and really need not be supported ...
 .pM.sub0.chr <- function(x, i) {
     rep.int(x@x[1L][NA], length(i))
@@ -102,6 +107,7 @@
         return(x@x[i])
     }
     ## FIXME: not sure how useful these optimizations are in practice ...
+    ## they could be deleted or performed only if 'length(i)' is small
     if (anyNA(i)) {
         ## optimize x[NA], etc.
         if (all(is.na(i))) {
@@ -114,22 +120,21 @@
         }
         ## optimize x[TRUE], etc.
         if (all(i)) {
-            xi <- as(x, geClass(x))@x
+            x <- as(x, geClass(x))@x
             if (ni > n * n) {
-                length(xi) <- ni
+                length(x) <- ni
             }
-            return(xi)
+            return(x)
         }
     }
     ## dispatch
-    ## FIXME: inefficient... is 'R_MAIN_DIR/subscript.c' machinery better?
+    ## FIXME: inefficient... is R_MAIN_DIR/subscript.c machinery better?
     ## though notably still an improvement over 'as(x, "matrix")[i]'
     ## which allocates a double vector of length n*n when 'x' is a "dMatrix"
     .pM.sub0.num(x, seq_len(n * n)[i])
 }
 .pM.sub1.logi <- function(x, i, drop, col) {
-    p <- 1L + col # subset on this dimension
-    pp <- 1L + !col # but not this one
+    p <- 1L + col # subset dimension [1=i, 2=j]
     d <- x@Dim
     dn <- dimnames(x)
     empty <- function() {
@@ -146,14 +151,16 @@
         stop("logical subscript too long")
     }
     ## FIXME: not sure how useful these optimizations are in practice ...
+    ## they could be deleted or performed only if 'length(i)' is small
     if (anyNA(i)) {
         ## optimize x[NA, ], etc.
         if (all(is.na(i))) {
-            x0 <- rep.int(x@x[1L][NA], n * n)
+            cl <- geClass(x)
+            x <- rep.int(x@x[1L][NA], n * n)
             if (!is.null(dn[[p]])) {
                 dn[[p]][] <- NA
             }
-            return(new(geClass(x), x = x0, Dim = d, Dimnames = dn))
+            return(new(cl, x = x, Dim = d, Dimnames = dn))
         }
     } else {
         ## optimize x[FALSE, ], etc.
@@ -163,14 +170,13 @@
         ## optimize x[TRUE, ], etc.
         if (all(i)) {
             if (n == 1L && !isFALSE(drop[1L])) {
-                x0 <- x@x
+                pp <- 1L + !col # marginal dimension [1=i, 2=j]
+                x <- x@x
                 if (!is.null(dn[[pp]])) {
-                    names(x0) <- dn[[pp]]
+                    names(x) <- dn[[pp]]
                 }
-                return(x0)
-            } else {
-                return(x)
             }
+            return(x)
         }
     }
     ## dispatch
@@ -196,7 +202,7 @@
         i <- i[i > 0L]
         i[i > n * n] <- NA
     }
-    ## Expects "nice" indices ... in-bounds integers and NA only
+    ## Expects "nice" indices: in-bounds integers and NA only
     .Call(packedMatrix_sub0_1ary, x, i)
 }
 .pM.sub1.num <- function(x, i, drop, col) {
@@ -204,7 +210,7 @@
     if (any(i >= n + 1L, na.rm = TRUE)) {
         .pM.error.oob()
     }
-    ## Expects "nice" indices ... in-bounds integers and NA only
+    ## Expects "nice" indices: in-bounds integers and NA only
     .Call(packedMatrix_sub1, x, seq_len(n)[i], drop, col)
 }
 
@@ -215,7 +221,7 @@
         return(.pM.sub0.logi(x, as.vector(i)))
     }
     if (is.logical(i)) {
-        dim(i) <- NULL
+        dim(i) <- NULL # avoids a copy if !identical(i, as.vector(i))
         return(.pM.sub0.logi(x, i))
     }
     d <- dim(i)
@@ -238,7 +244,7 @@
             if (any(i > x@Dim[1L], na.rm = TRUE)) {
                 .pM.error.oob()
             }
-            ## Expects "nice" indices ... in-bounds integers and NA only
+            ## Expects "nice" indices: in-bounds integers and NA only
             .Call(packedMatrix_sub0_2ary, x, i)
         } else if (is.character(i)) {
             if (d[1L] == 0L) {
@@ -253,7 +259,7 @@
             if (any(rowSums(is.na(i)) == 0L & rowSums(is.na(m)) > 0L)) {
                 .pM.error.oob()
             }
-            ## Expects "nice" indices ... in-bounds integers and NA only
+            ## Expects "nice" indices: in-bounds integers and NA only
             .Call(packedMatrix_sub0_2ary, x, m)
         } else {
             .pM.error.ist(i)
@@ -270,7 +276,7 @@
     }
 }
 .pM.sub1.mat <- function(x, i, drop, col) {
-    dim(i) <- NULL
+    dim(i) <- NULL # avoids a copy if !identical(i, as.vector(i))
     if (is.numeric(i)) {
         .pM.sub1.num(x, i, drop = drop, col = col)
     } else if (is.logical(i)) {
