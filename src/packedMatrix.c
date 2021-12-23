@@ -314,6 +314,11 @@ SEXP packedMatrix_diag_set(SEXP obj, SEXP val)
     {
 	SET_SLOT(res, Matrix_diagSym, mkString("N"));
     }
+    /* Clear 'factors' slot when assigning to "[dln]spMatrix" */
+    if (R_has_slot(res, Matrix_factorSym) &&
+	LENGTH(GET_SLOT(res, Matrix_factorSym)) > 0) {
+	SET_SLOT(res, Matrix_factorSym, allocVector(VECSXP, 0));
+    }
 
     /* ? double result : logical result */
     Rboolean dbl = TRUE;
@@ -526,7 +531,7 @@ SEXP packedMatrix_sub0_2ary(SEXP obj, SEXP index)
 		    {							\
 			for (int j = 0; j <= i; ++j, pos += incr)	\
 			{						\
-			    px1[pos] = px0[PM_AR21_UP(i, j)];		\
+			    px1[pos] = px0[PM_AR21_UP(j, i)];		\
 			}						\
 			for (int j = i + 1; j < n; ++j, pos += incr)	\
 			{						\
@@ -555,7 +560,7 @@ SEXP packedMatrix_sub0_2ary(SEXP obj, SEXP index)
 			}						\
 			for (int j = i; j < n; ++j, pos += incr)	\
 			{						\
-			    px1[pos] = px0[PM_AR21_LO(i, j, n2)];	\
+			    px1[pos] = px0[PM_AR21_LO(j, i, n2)];	\
 			}						\
 		    }							\
 		    else						\
